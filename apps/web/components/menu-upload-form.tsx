@@ -339,8 +339,7 @@ export function MenuUploadForm({
     }
   }
 
-  async function handleSubmit(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
+  async function submitSelectedFiles({ skipDuplicateCheck = false } = {}) {
     const fileError = getFileError(files);
 
     if (!anonymousClientId) {
@@ -357,33 +356,45 @@ export function MenuUploadForm({
     setIsSubmitting(true);
     setWasDuplicateReuse(false);
     setShareMessage(null);
-    setStatusMessage("Getting ready to upload.");
+    setStatusMessage(
+      skipDuplicateCheck
+        ? "Getting ready to read this menu again."
+        : "Getting ready to upload."
+    );
 
     try {
       const sourceType = getSourceType(files[0]);
       let fileHashes: string[] | undefined;
 
-      try {
-        setStatusMessage("Checking whether this menu was already uploaded.");
-        fileHashes = await getFileHashes(files);
+      if (!skipDuplicateCheck) {
+        try {
+          setStatusMessage("Checking whether this menu was already uploaded.");
+          fileHashes = await getFileHashes(files);
 
-        const existingMenu = await convex.query(
-          api.menus.findMenuByUploadFingerprint,
-          {
-            fileHashes,
-            sourceType,
+          const existingMenu = await convex.query(
+            api.menus.findMenuByUploadFingerprint,
+            {
+              fileHashes,
+              sourceType,
+            }
+          );
+
+          if (existingMenu) {
+            setMenuId(existingMenu.menuId);
+            setWasDuplicateReuse(true);
+            setStatusMessage(existingMenuMessage);
+            return;
           }
-        );
-
-        if (existingMenu) {
-          setMenuId(existingMenu.menuId);
-          setWasDuplicateReuse(true);
-          setStatusMessage(existingMenuMessage);
-          return;
+        } catch (duplicateCheckError) {
+          console.warn("Menu duplicate check skipped.", duplicateCheckError);
+          setStatusMessage("Getting ready to upload.");
         }
-      } catch (duplicateCheckError) {
-        console.warn("Menu duplicate check skipped.", duplicateCheckError);
-        setStatusMessage("Getting ready to upload.");
+      } else {
+        try {
+          fileHashes = await getFileHashes(files);
+        } catch (hashError) {
+          console.warn("Menu upload fingerprint skipped.", hashError);
+        }
       }
 
       const storageIds: Array<Id<"_storage">> = [];
@@ -434,6 +445,11 @@ export function MenuUploadForm({
     } finally {
       setIsSubmitting(false);
     }
+  }
+
+  async function handleSubmit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    await submitSelectedFiles();
   }
 
   async function handleDetailsSubmit(event: FormEvent<HTMLFormElement>) {
@@ -758,6 +774,26 @@ export function MenuUploadForm({
             <p aria-live="polite" className="text-sm text-foreground-2">
               {shareMessage}
             </p>
+          ) : null}
+          {wasDuplicateReuse ? (
+            <section className="garden-bed menu-paper space-y-3 px-6 py-5">
+              <h3 className="font-display text-2xl font-semibold">
+                Want a fresh scan?
+              </h3>
+              <p className="text-sm leading-6 text-foreground-2">
+                Menu Garden reused a previous result to save time and AI cost.
+                If this file should be read again, start a new scan from the
+                selected upload.
+              </p>
+              <button
+                className="button-secondary w-full sm:w-auto"
+                disabled={!canUpload || files.length === 0}
+                onClick={() => void submitSelectedFiles({ skipDuplicateCheck: true })}
+                type="button"
+              >
+                {isSubmitting ? "Reading again" : "Read this file again"}
+              </button>
+            </section>
           ) : null}
           {!wasDuplicateReuse ? (
             <form className="garden-bed menu-paper space-y-4 px-6 py-6" onSubmit={handleDetailsSubmit}>

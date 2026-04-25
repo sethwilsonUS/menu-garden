@@ -608,7 +608,7 @@ export const findMenuByUploadFingerprint = query({
       )
       .collect();
 
-    for (const match of matches) {
+    for (const match of matches.sort((a, b) => b.createdAt - a.createdAt)) {
       if (
         match.sourceType !== args.sourceType ||
         match.fileCount !== fingerprint.fileCount
