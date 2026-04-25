@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Build script for Vercel production, preview, and local builds.
 #
-# - Production (VERCEL_ENV=production): deploys Convex functions to prod, seeds the sample menu, then builds Next.js
+# - Production (VERCEL_ENV=production): deploys Convex functions to prod, then builds Next.js
 # - Preview   (VERCEL_ENV=preview):    creates an isolated Convex preview deployment per branch and seeds the sample menu
 # - Local     (no VERCEL_ENV):         builds the web app only
 
@@ -12,13 +12,11 @@ REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 SHARED_DIR="$REPO_ROOT/packages/shared"
 
 WEB_BUILD_CMD="cd '$REPO_ROOT' && npm run build --workspace @menu-garden/web"
-PROD_SEED_AND_BUILD_CMD="cd '$SHARED_DIR' && npx convex run menus:seedSampleMenu --prod && $WEB_BUILD_CMD"
-
 if [ "${VERCEL_ENV:-}" = "production" ]; then
-  echo "Production build: deploying Convex functions, seeding the sample menu, and building the web app"
+  echo "Production build: deploying Convex functions and building the web app"
   cd "$SHARED_DIR"
   npx convex deploy \
-    --cmd "$PROD_SEED_AND_BUILD_CMD" \
+    --cmd "$WEB_BUILD_CMD" \
     --cmd-url-env-var-name NEXT_PUBLIC_CONVEX_URL
 
 elif [ "${VERCEL_ENV:-}" = "preview" ]; then
