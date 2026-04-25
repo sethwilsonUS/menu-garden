@@ -4,9 +4,21 @@ import { internal } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
 import { action, internalAction, type ActionCtx } from "./_generated/server";
 import { v } from "convex/values";
-import { fromBuffer } from "pdf2pic";
 
 type SourceType = "pdf" | "image";
+
+type MenuParseInput =
+  | {
+      kind: "image";
+      imageUrl: string;
+      label: string;
+    }
+  | {
+      kind: "pdf";
+      fileData: string;
+      filename: string;
+      label: string;
+    };
 
 type ParsedMenu = {
   warnings: string[];
@@ -77,7 +89,7 @@ const MENU_EXTRACTION_PROMPT = `You are a menu extraction assistant. Extract eve
 - dietaryTags: infer from descriptions. Use only these values: ["vegetarian", "vegan", "gf", "halal", "kosher"]
 - spiceLevel: if mentioned, one of ["mild", "medium", "hot", "extra-hot"]; otherwise null
 
-The image may be a printed menu, a photo of an overhead counter menu board, a drive-through or fast-food board, or one page of a multi-page menu. Preserve combo names, size names, modifier groups, price columns, and source/category ordering. If this page appears to continue a category from a previous page, use that same category name rather than inventing a new continuation label. If text is blurry, cut off, hidden by glare, or uncertain, add a short user-friendly warning to warnings.
+The source may be a printed menu, a photo of an overhead counter menu board, a drive-through or fast-food board, one page of a multi-page menu, or a browser-printed PDF of a website menu. Preserve combo names, size names, modifier groups, price columns, and source/category ordering. Ignore browser print headers, footers, navigation links, cookie banners, and unrelated website chrome. If this source appears to continue a category from a previous source, use that same category name rather than inventing a new continuation label. If text is blurry, cut off, hidden by glare, or uncertain, add a short user-friendly warning to warnings.
 
 Return ONLY valid JSON matching the schema. Do not include any commentary.`;
 
@@ -246,48 +258,53 @@ function getOpenAIKey() {
   return apiKey;
 }
 
-async function getImageInputs(blob: Blob, sourceType: SourceType) {
+async function getMenuParseInputs(
+  blob: Blob,
+  sourceType: SourceType,
+  inputNumber = 1
+) {
   const contentType = blob.type || (sourceType === "pdf" ? "application/pdf" : "image/jpeg");
   const fileBuffer = Buffer.from(await blob.arrayBuffer());
+  const base64 = fileBuffer.toString("base64");
 
   if (sourceType !== "pdf") {
-    return [`data:${contentType};base64,${fileBuffer.toString("base64")}`];
+    return [
+      {
+        kind: "image" as const,
+        imageUrl: `data:${contentType};base64,${base64}`,
+        label: `page ${inputNumber}`,
+      },
+    ];
   }
 
-  const converter = fromBuffer(fileBuffer, {
-    density: 180,
-    format: "png",
-    width: 1400,
-    preserveAspectRatio: true,
-  });
-  const pages = (await converter.bulk(-1, {
-    responseType: "base64",
-  })) as Array<{ base64?: string } | string>;
-
-  return pages
-    .map((page) => (typeof page === "string" ? page : page.base64))
-    .filter((page): page is string => Boolean(page))
-    .map((page) => `data:image/png;base64,${page}`);
+  return [
+    {
+      kind: "pdf" as const,
+      fileData: `data:application/pdf;base64,${base64}`,
+      filename: `menu-${inputNumber}.pdf`,
+      label: `PDF file ${inputNumber}`,
+    },
+  ];
 }
 
-async function getImageInputsFromStorageIds(
+async function getMenuParseInputsFromStorageIds(
   ctx: ActionCtx,
   storageIds: Array<Id<"_storage">>,
   sourceType: SourceType
 ) {
-  const imageInputs: string[] = [];
+  const inputs: MenuParseInput[] = [];
 
-  for (const storageId of storageIds) {
+  for (const [index, storageId] of storageIds.entries()) {
     const storedFile = await ctx.storage.get(storageId);
 
     if (!storedFile) {
       throw new Error("Uploaded file could not be found in Convex storage.");
     }
 
-    imageInputs.push(...(await getImageInputs(storedFile, sourceType)));
+    inputs.push(...(await getMenuParseInputs(storedFile, sourceType, index + 1)));
   }
 
-  return imageInputs;
+  return inputs;
 }
 
 function extractOutputText(response: unknown) {
@@ -345,7 +362,27 @@ function normalizeParsedMenu(parsedMenus: ParsedMenu[]): ParsedMenu {
   };
 }
 
-async function parseImageWithOpenAI(imageUrl: string, pageNumber: number) {
+function getParseInputContent(input: MenuParseInput) {
+  if (input.kind === "image") {
+    return [
+      {
+        type: "input_image" as const,
+        image_url: input.imageUrl,
+        detail: "high" as const,
+      },
+    ];
+  }
+
+  return [
+    {
+      type: "input_file" as const,
+      filename: input.filename,
+      file_data: input.fileData,
+    },
+  ];
+}
+
+async function parseMenuInputWithOpenAI(input: MenuParseInput) {
   const apiKey = getOpenAIKey();
 
   const response = await fetch("https://api.openai.com/v1/responses", {
@@ -363,13 +400,9 @@ async function parseImageWithOpenAI(imageUrl: string, pageNumber: number) {
           content: [
             {
               type: "input_text",
-              text: `Extract the menu from page ${pageNumber}.`,
+              text: `Extract the menu from ${input.label}. For PDFs, read all pages in that PDF and ignore browser print headers, footers, navigation, cookie banners, and unrelated website chrome.`,
             },
-            {
-              type: "input_image",
-              image_url: imageUrl,
-              detail: "high",
-            },
+            ...getParseInputContent(input),
           ],
         },
       ],
@@ -393,51 +426,51 @@ async function parseImageWithOpenAI(imageUrl: string, pageNumber: number) {
   return JSON.parse(extractOutputText(json)) as ParsedMenu;
 }
 
-function formatPageCount(pageCount: number) {
-  return `${pageCount} menu page${pageCount === 1 ? "" : "s"}`;
+function formatInputCount(inputCount: number) {
+  return `${inputCount} menu upload${inputCount === 1 ? "" : "s"}`;
 }
 
-async function parsePagesWithProgress(
+async function parseInputsWithProgress(
   ctx: ActionCtx,
   menuId: Id<"menus">,
-  imageInputs: string[]
+  inputs: MenuParseInput[]
 ) {
-  const totalPages = imageInputs.length;
+  const totalInputs = inputs.length;
   const parsedPages: ParsedMenu[] = [];
 
   await ctx.runMutation(internal.menus.updateParseJob, {
     menuId,
     status: "extracting",
-    message: `Starting AI reading for ${formatPageCount(totalPages)}.`,
-    totalPages,
-    currentPage: totalPages > 0 ? 1 : undefined,
+    message: `Starting AI reading for ${formatInputCount(totalInputs)}.`,
+    totalPages: totalInputs,
+    currentPage: totalInputs > 0 ? 1 : undefined,
     completedPages: 0,
   });
 
-  for (const [index, imageInput] of imageInputs.entries()) {
-    const pageNumber = index + 1;
+  for (const [index, input] of inputs.entries()) {
+    const inputNumber = index + 1;
 
     await ctx.runMutation(internal.menus.updateParseJob, {
       menuId,
       status: "extracting",
-      message: `Reading page ${pageNumber} of ${totalPages} with AI.`,
-      totalPages,
-      currentPage: pageNumber,
+      message: `Reading ${input.label} of ${totalInputs} with AI.`,
+      totalPages: totalInputs,
+      currentPage: inputNumber,
       completedPages: index,
     });
 
-    parsedPages.push(await parseImageWithOpenAI(imageInput, pageNumber));
+    parsedPages.push(await parseMenuInputWithOpenAI(input));
 
     await ctx.runMutation(internal.menus.updateParseJob, {
       menuId,
       status: "extracting",
       message:
-        pageNumber === totalPages
-          ? `Finished reading ${formatPageCount(totalPages)}.`
-          : `Finished page ${pageNumber} of ${totalPages}.`,
-      totalPages,
-      currentPage: pageNumber === totalPages ? undefined : pageNumber + 1,
-      completedPages: pageNumber,
+        inputNumber === totalInputs
+          ? `Finished reading ${formatInputCount(totalInputs)}.`
+          : `Finished ${input.label} of ${totalInputs}.`,
+      totalPages: totalInputs,
+      currentPage: inputNumber === totalInputs ? undefined : inputNumber + 1,
+      completedPages: inputNumber,
     });
   }
 
@@ -759,7 +792,7 @@ export const parseMenu = internalAction({
         status: args.sourceType === "pdf" ? "converting" : "extracting",
         message:
           args.sourceType === "pdf"
-            ? "Preparing PDF pages."
+            ? "Preparing PDF for AI reading."
             : "Reading the menu image.",
         totalPages: undefined,
         currentPage: undefined,
@@ -772,21 +805,21 @@ export const parseMenu = internalAction({
         throw new Error("Uploaded file could not be found in Convex storage.");
       }
 
-      const imageInputs = await getImageInputs(storedFile, args.sourceType);
+      const parseInputs = await getMenuParseInputs(storedFile, args.sourceType);
 
-      if (imageInputs.length === 0) {
-        throw new Error("No menu pages were available for parsing.");
+      if (parseInputs.length === 0) {
+        throw new Error("No menu uploads were available for parsing.");
       }
 
-      const parsedPages = await parsePagesWithProgress(ctx, args.menuId, imageInputs);
+      const parsedPages = await parseInputsWithProgress(ctx, args.menuId, parseInputs);
 
       await ctx.runMutation(internal.menus.updateParseJob, {
         menuId: args.menuId,
         status: "saving",
         message: "Building the accessible menu.",
-        totalPages: imageInputs.length,
+        totalPages: parseInputs.length,
         currentPage: undefined,
-        completedPages: imageInputs.length,
+        completedPages: parseInputs.length,
       });
 
       await ctx.runMutation(internal.menus.saveParsedMenu, {
@@ -827,25 +860,25 @@ export const parseMenuUploads = internalAction({
         completedPages: undefined,
       });
 
-      const imageInputs = await getImageInputsFromStorageIds(
+      const parseInputs = await getMenuParseInputsFromStorageIds(
         ctx,
         args.storageIds as Array<Id<"_storage">>,
         args.sourceType
       );
 
-      if (imageInputs.length === 0) {
-        throw new Error("No menu pages were available for parsing.");
+      if (parseInputs.length === 0) {
+        throw new Error("No menu uploads were available for parsing.");
       }
 
-      const parsedPages = await parsePagesWithProgress(ctx, args.menuId, imageInputs);
+      const parsedPages = await parseInputsWithProgress(ctx, args.menuId, parseInputs);
 
       await ctx.runMutation(internal.menus.updateParseJob, {
         menuId: args.menuId,
         status: "saving",
         message: "Building the accessible menu.",
-        totalPages: imageInputs.length,
+        totalPages: parseInputs.length,
         currentPage: undefined,
-        completedPages: imageInputs.length,
+        completedPages: parseInputs.length,
       });
 
       await ctx.runMutation(internal.menus.saveParsedMenu, {

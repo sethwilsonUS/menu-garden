@@ -25,8 +25,8 @@ export function MenuParseProgress({
       : Math.round((completedPages / totalPages) * 100);
   const progressText =
     currentPage && completedPages < totalPages
-      ? `${completedPages} of ${totalPages} pages read. Currently reading page ${currentPage}.`
-      : `${completedPages} of ${totalPages} pages read.`;
+      ? `${completedPages} of ${totalPages} menu uploads read. Currently reading upload ${currentPage}.`
+      : `${completedPages} of ${totalPages} menu uploads read.`;
 
   return (
     <div className="mt-3 space-y-2">
