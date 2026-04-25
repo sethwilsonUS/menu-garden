@@ -382,8 +382,14 @@ function getParseInputContent(input: MenuParseInput) {
   ];
 }
 
-async function parseMenuInputWithOpenAI(input: MenuParseInput) {
+async function parseMenuInputWithOpenAI(
+  input: MenuParseInput,
+  extractionChecklist?: string | null
+) {
   const apiKey = getOpenAIKey();
+  const checklistText = extractionChecklist
+    ? `\n\nBefore returning JSON, use this menu-section checklist from a first pass over the same PDF. The final JSON should cover all relevant sections from this checklist, not just the first section:\n${extractionChecklist}`
+    : "";
 
   const response = await fetch("https://api.openai.com/v1/responses", {
     method: "POST",
@@ -400,7 +406,7 @@ async function parseMenuInputWithOpenAI(input: MenuParseInput) {
           content: [
             {
               type: "input_text",
-              text: `Extract the menu from ${input.label}. For PDFs, read all pages in that PDF and ignore browser print headers, footers, navigation, cookie banners, and unrelated website chrome.`,
+              text: `Extract the complete menu from ${input.label}. For PDFs, read all pages in that PDF and ignore browser print headers, footers, navigation, cookie banners, and unrelated website chrome. Do not stop after the first category or first page. Include breakfast, lunch, dinner, sandwiches, meats, sides, tacos, kids, desserts, drinks, and any other menu sections when present.${checklistText}`,
             },
             ...getParseInputContent(input),
           ],
@@ -424,6 +430,45 @@ async function parseMenuInputWithOpenAI(input: MenuParseInput) {
 
   const json = await response.json();
   return JSON.parse(extractOutputText(json)) as ParsedMenu;
+}
+
+async function inventoryMenuInputWithOpenAI(input: Extract<MenuParseInput, { kind: "pdf" }>) {
+  const response = await fetch("https://api.openai.com/v1/responses", {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${getOpenAIKey()}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      model: process.env.OPENAI_MENU_PARSE_MODEL ?? "gpt-4o-2024-08-06",
+      instructions:
+        "You are preparing a restaurant menu extraction checklist. Inspect the whole PDF and identify every menu section/category visible across all pages. Ignore browser print headers, footers, navigation, cookie banners, and unrelated website chrome. Return concise plain text only.",
+      input: [
+        {
+          role: "user",
+          content: [
+            {
+              type: "input_text",
+              text: "List every restaurant menu category or section in this PDF, with 2-5 example item names for each section. Pay special attention to sections after breakfast and later pages.",
+            },
+            ...getParseInputContent(input),
+          ],
+        },
+      ],
+    }),
+  });
+
+  if (!response.ok) {
+    return null;
+  }
+
+  const json = await response.json();
+
+  try {
+    return extractOutputText(json).trim().slice(0, 4000);
+  } catch {
+    return null;
+  }
 }
 
 function formatInputCount(inputCount: number) {
@@ -459,7 +504,31 @@ async function parseInputsWithProgress(
       completedPages: index,
     });
 
-    parsedPages.push(await parseMenuInputWithOpenAI(input));
+    let extractionChecklist: string | null = null;
+
+    if (input.kind === "pdf") {
+      await ctx.runMutation(internal.menus.updateParseJob, {
+        menuId,
+        status: "extracting",
+        message: `Finding menu sections in ${input.label}.`,
+        totalPages: totalInputs,
+        currentPage: inputNumber,
+        completedPages: index,
+      });
+
+      extractionChecklist = await inventoryMenuInputWithOpenAI(input);
+
+      await ctx.runMutation(internal.menus.updateParseJob, {
+        menuId,
+        status: "extracting",
+        message: `Extracting the complete menu from ${input.label}.`,
+        totalPages: totalInputs,
+        currentPage: inputNumber,
+        completedPages: index,
+      });
+    }
+
+    parsedPages.push(await parseMenuInputWithOpenAI(input, extractionChecklist));
 
     await ctx.runMutation(internal.menus.updateParseJob, {
       menuId,
