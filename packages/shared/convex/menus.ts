@@ -393,6 +393,9 @@ async function buildMenuSummary(
           message: parseJob.message,
           errorMessage: parseJob.errorMessage,
           warnings: parseJob.warnings ?? [],
+          totalPages: parseJob.totalPages,
+          currentPage: parseJob.currentPage,
+          completedPages: parseJob.completedPages,
           updatedAt: parseJob.updatedAt,
         }
       : null,
@@ -889,6 +892,9 @@ export const getParseJob = query({
       message: parseJob.message,
       errorMessage: parseJob.errorMessage,
       warnings: parseJob.warnings ?? [],
+      totalPages: parseJob.totalPages,
+      currentPage: parseJob.currentPage,
+      completedPages: parseJob.completedPages,
       updatedAt: parseJob.updatedAt,
     };
   },
@@ -900,6 +906,9 @@ export const updateParseJob = internalMutation({
     status: parseStatusValidator,
     message: v.string(),
     errorMessage: v.optional(v.string()),
+    totalPages: v.optional(v.float64()),
+    currentPage: v.optional(v.float64()),
+    completedPages: v.optional(v.float64()),
   },
   handler: async (ctx, args) => {
     const parseJob = await ctx.db
@@ -915,6 +924,9 @@ export const updateParseJob = internalMutation({
       status: args.status,
       message: args.message,
       errorMessage: args.errorMessage,
+      totalPages: args.totalPages,
+      currentPage: args.currentPage,
+      completedPages: args.completedPages,
       updatedAt: Date.now(),
     });
   },
@@ -941,11 +953,16 @@ export const saveParsedMenu = internalMutation({
       .first();
 
     if (parseJob) {
+      const totalPages = parseJob.totalPages ?? parseJob.completedPages;
+
       await ctx.db.patch(parseJob._id, {
         status: "ready",
         message: "Your accessible menu is ready.",
         errorMessage: undefined,
         warnings: args.parsedMenu.warnings,
+        totalPages,
+        currentPage: undefined,
+        completedPages: totalPages,
         updatedAt: now,
       });
     }
@@ -976,6 +993,7 @@ export const markParseFailed = internalMutation({
         message: "We could not read that menu.",
         errorMessage: args.errorMessage,
         warnings: undefined,
+        currentPage: undefined,
         updatedAt: now,
       });
     }

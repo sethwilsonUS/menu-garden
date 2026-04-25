@@ -34,6 +34,9 @@ export type MenuParseJobSummary = {
   message: string;
   errorMessage?: string;
   warnings?: string[];
+  totalPages?: number;
+  currentPage?: number;
+  completedPages?: number;
   updatedAt: number;
 };
 

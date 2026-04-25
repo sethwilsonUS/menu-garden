@@ -5,6 +5,7 @@ import { useMemo, useState } from "react";
 import { useQuery } from "convex/react";
 import { api } from "@menu-garden/shared/convex/_generated/api";
 import type { MenuItemSummary, MenuSummary } from "@menu-garden/shared/types";
+import { MenuParseProgress } from "./menu-parse-progress";
 
 function dietaryLabel(item: MenuItemSummary) {
   const details = [
@@ -188,6 +189,7 @@ export function PublicMenuView({
       {menu.parseJob && menu.parseJob.status !== "ready" ? (
         <section aria-live="polite" className="garden-bed px-6 py-4" role="status">
           <p className="font-semibold">{menu.parseJob.message}</p>
+          <MenuParseProgress parseJob={menu.parseJob} />
           {menu.parseJob.errorMessage ? (
             <p className="mt-2 text-sm text-foreground-2">
               {menu.parseJob.errorMessage}

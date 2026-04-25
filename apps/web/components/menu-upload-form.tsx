@@ -15,6 +15,7 @@ import {
   PlateSeedlingMark,
   UploadTrayIcon,
 } from "./brand-mark";
+import { MenuParseProgress } from "./menu-parse-progress";
 
 const acceptedTypes = ["application/pdf", "image/png", "image/jpeg", "image/webp"];
 const maxFiles = 8;
@@ -708,6 +709,7 @@ export function MenuUploadForm({
             role="status"
           >
             <p className="font-semibold">{statusMessage}</p>
+            <MenuParseProgress parseJob={menu?.parseJob} />
             {menu?.parseJob?.warnings?.length ? (
               <ul className="mt-3 list-disc space-y-1 pl-5 text-sm leading-6 text-foreground-2">
                 {menu.parseJob.warnings.map((warning) => (

@@ -318,6 +318,57 @@ async function parseImageWithOpenAI(imageUrl: string, pageNumber: number) {
   return JSON.parse(extractOutputText(json)) as ParsedMenu;
 }
 
+function formatPageCount(pageCount: number) {
+  return `${pageCount} menu page${pageCount === 1 ? "" : "s"}`;
+}
+
+async function parsePagesWithProgress(
+  ctx: ActionCtx,
+  menuId: Id<"menus">,
+  imageInputs: string[]
+) {
+  const totalPages = imageInputs.length;
+  const parsedPages: ParsedMenu[] = [];
+
+  await ctx.runMutation(internal.menus.updateParseJob, {
+    menuId,
+    status: "extracting",
+    message: `Starting AI reading for ${formatPageCount(totalPages)}.`,
+    totalPages,
+    currentPage: totalPages > 0 ? 1 : undefined,
+    completedPages: 0,
+  });
+
+  for (const [index, imageInput] of imageInputs.entries()) {
+    const pageNumber = index + 1;
+
+    await ctx.runMutation(internal.menus.updateParseJob, {
+      menuId,
+      status: "extracting",
+      message: `Reading page ${pageNumber} of ${totalPages} with AI.`,
+      totalPages,
+      currentPage: pageNumber,
+      completedPages: index,
+    });
+
+    parsedPages.push(await parseImageWithOpenAI(imageInput, pageNumber));
+
+    await ctx.runMutation(internal.menus.updateParseJob, {
+      menuId,
+      status: "extracting",
+      message:
+        pageNumber === totalPages
+          ? `Finished reading ${formatPageCount(totalPages)}.`
+          : `Finished page ${pageNumber} of ${totalPages}.`,
+      totalPages,
+      currentPage: pageNumber === totalPages ? undefined : pageNumber + 1,
+      completedPages: pageNumber,
+    });
+  }
+
+  return parsedPages;
+}
+
 function buildChatInput(context: ChatContext) {
   return [
     {
@@ -540,6 +591,9 @@ export const parseMenu = internalAction({
           args.sourceType === "pdf"
             ? "Preparing PDF pages."
             : "Reading the menu image.",
+        totalPages: undefined,
+        currentPage: undefined,
+        completedPages: undefined,
       });
 
       const storedFile = await ctx.storage.get(args.storageId as Id<"_storage">);
@@ -554,24 +608,15 @@ export const parseMenu = internalAction({
         throw new Error("No menu pages were available for parsing.");
       }
 
-      await ctx.runMutation(internal.menus.updateParseJob, {
-        menuId: args.menuId,
-        status: "extracting",
-        message: `Reading ${imageInputs.length} menu page${
-          imageInputs.length === 1 ? "" : "s"
-        }.`,
-      });
-
-      const parsedPages: ParsedMenu[] = [];
-
-      for (const [index, imageInput] of imageInputs.entries()) {
-        parsedPages.push(await parseImageWithOpenAI(imageInput, index + 1));
-      }
+      const parsedPages = await parsePagesWithProgress(ctx, args.menuId, imageInputs);
 
       await ctx.runMutation(internal.menus.updateParseJob, {
         menuId: args.menuId,
         status: "saving",
         message: "Building the accessible menu.",
+        totalPages: imageInputs.length,
+        currentPage: undefined,
+        completedPages: imageInputs.length,
       });
 
       await ctx.runMutation(internal.menus.saveParsedMenu, {
@@ -607,6 +652,9 @@ export const parseMenuUploads = internalAction({
             : `Reading ${args.storageIds.length} menu image${
                 args.storageIds.length === 1 ? "" : "s"
               }.`,
+        totalPages: undefined,
+        currentPage: undefined,
+        completedPages: undefined,
       });
 
       const imageInputs = await getImageInputsFromStorageIds(
@@ -619,24 +667,15 @@ export const parseMenuUploads = internalAction({
         throw new Error("No menu pages were available for parsing.");
       }
 
-      await ctx.runMutation(internal.menus.updateParseJob, {
-        menuId: args.menuId,
-        status: "extracting",
-        message: `Reading ${imageInputs.length} menu page${
-          imageInputs.length === 1 ? "" : "s"
-        }.`,
-      });
-
-      const parsedPages: ParsedMenu[] = [];
-
-      for (const [index, imageInput] of imageInputs.entries()) {
-        parsedPages.push(await parseImageWithOpenAI(imageInput, index + 1));
-      }
+      const parsedPages = await parsePagesWithProgress(ctx, args.menuId, imageInputs);
 
       await ctx.runMutation(internal.menus.updateParseJob, {
         menuId: args.menuId,
         status: "saving",
         message: "Building the accessible menu.",
+        totalPages: imageInputs.length,
+        currentPage: undefined,
+        completedPages: imageInputs.length,
       });
 
       await ctx.runMutation(internal.menus.saveParsedMenu, {
