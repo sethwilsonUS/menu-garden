@@ -1,0 +1,37 @@
+{
+  "name": "@menu-garden/mobile",
+  "version": "1.0.0",
+  "main": "expo-router/entry",
+  "scripts": {
+    "dev": "expo start",
+    "start": "expo start",
+    "android": "expo start --android",
+    "ios": "expo start --ios",
+    "web": "expo start --web",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@clerk/clerk-expo": "^2.19.6",
+    "@menu-garden/shared": "*",
+    "convex": "^1.29.3",
+    "expo": "~55.0.12",
+    "expo-constants": "~55.0.7",
+    "expo-haptics": "^55.0.14",
+    "expo-image-picker": "^55.0.18",
+    "expo-linking": "~55.0.11",
+    "expo-router": "~55.0.11",
+    "expo-status-bar": "~55.0.4",
+    "react": "19.2.0",
+    "react-dom": "19.2.0",
+    "react-native": "0.83.4",
+    "react-native-safe-area-context": "~5.6.0",
+    "react-native-screens": "~4.23.0",
+    "react-native-web": "~0.21.0"
+  },
+  "devDependencies": {
+    "@babel/core": "7.28.5",
+    "@types/react": "~19.2.10",
+    "typescript": "5.9.3"
+  },
+  "private": true
+}

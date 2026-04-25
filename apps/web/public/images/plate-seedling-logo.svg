@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-labelledby="title desc">
+  <title id="title">Menu Garden</title>
+  <desc id="desc">A seedling growing from a plate.</desc>
+  <rect width="512" height="512" rx="112" fill="#f7f6f3"/>
+  <ellipse cx="256" cy="332" rx="174" ry="76" fill="#efede8" stroke="#036b4a" stroke-width="24"/>
+  <circle cx="256" cy="305" r="111" fill="none" stroke="#036b4a" stroke-width="22"/>
+  <path d="M256 311V144" fill="none" stroke="#036b4a" stroke-linecap="round" stroke-width="24"/>
+  <path d="M249 205c-62-4-99-49-105-105 63-3 104 36 105 105Z" fill="#036b4a"/>
+  <path d="M265 183c58-15 96-55 102-108-66-2-103 38-102 108Z" fill="#036b4a"/>
+  <path d="M257 145c-3-51-27-88-69-112-26 56-5 98 69 112Z" fill="#036b4a"/>
+</svg>

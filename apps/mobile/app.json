@@ -1,0 +1,43 @@
+{
+  "expo": {
+    "name": "Menu Garden",
+    "slug": "menu-garden",
+    "scheme": "menugarden",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "icon": "./assets/icon.png",
+    "userInterfaceStyle": "automatic",
+    "splash": {
+      "image": "./assets/splash.png",
+      "resizeMode": "contain",
+      "backgroundColor": "#f7f6f3"
+    },
+    "assetBundlePatterns": ["**/*"],
+    "experiments": {
+      "typedRoutes": true
+    },
+    "ios": {
+      "supportsTablet": true
+    },
+    "android": {
+      "adaptiveIcon": {
+        "foregroundImage": "./assets/adaptive-icon.png",
+        "backgroundColor": "#ffffff"
+      }
+    },
+    "web": {
+      "bundler": "metro",
+      "favicon": "./assets/favicon.png"
+    },
+    "plugins": [
+      "expo-router",
+      [
+        "expo-image-picker",
+        {
+          "photosPermission": "Allow Menu Garden to choose menu photos from your library.",
+          "cameraPermission": "Allow Menu Garden to photograph restaurant menus."
+        }
+      ]
+    ]
+  }
+}

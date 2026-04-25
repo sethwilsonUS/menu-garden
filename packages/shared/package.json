@@ -1,0 +1,32 @@
+{
+  "name": "@menu-garden/shared",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "convex:dev": "convex dev",
+    "setup": "convex dev --until-success",
+    "typecheck": "tsc --noEmit -p tsconfig.json && tsc --noEmit -p convex"
+  },
+  "exports": {
+    ".": "./index.ts",
+    "./hooks": "./hooks/index.ts",
+    "./hooks/use-chat-session": "./hooks/use-chat-session.ts",
+    "./hooks/use-menu": "./hooks/use-menu.ts",
+    "./hooks/use-nearby": "./hooks/use-nearby.ts",
+    "./types": "./types/index.ts",
+    "./types/auth": "./types/auth.ts",
+    "./types/menu": "./types/menu.ts",
+    "./convex/_generated/api": {
+      "types": "./convex/_generated/api.d.ts",
+      "default": "./convex/_generated/api.js"
+    },
+    "./convex/_generated/dataModel": "./convex/_generated/dataModel.d.ts"
+  },
+  "dependencies": {
+    "convex": "^1.29.3",
+    "pdf2pic": "^3.2.0"
+  },
+  "devDependencies": {
+    "typescript": "5.9.3"
+  }
+}
