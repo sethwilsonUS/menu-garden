@@ -47,10 +47,27 @@ type ReferencedItems = {
   itemIds: string[];
 };
 
+type NutritionAnalysis = {
+  likelyGoodOptions: Array<{
+    itemId: string;
+    reason: string;
+  }>;
+  maybeOptions: Array<{
+    itemId: string;
+    reason: string;
+  }>;
+  lessIdealOptions: Array<{
+    itemId: string;
+    reason: string;
+  }>;
+  uncertaintyNote: string;
+};
+
 const USER_PARSE_ERROR =
   "We could not read that menu. Try uploading a clearer photo or PDF.";
 const USER_CHAT_ERROR =
   "I could not answer that just now. Please try again in a moment.";
+const chatJobCleanupDelayMs = 15 * 60 * 1000;
 
 const MENU_EXTRACTION_PROMPT = `You are a menu extraction assistant. Extract every item from this restaurant menu image and organize it by category exactly as it appears. For each item include:
 - name (exactly as written)
@@ -64,9 +81,17 @@ The image may be a printed menu, a photo of an overhead counter menu board, a dr
 
 Return ONLY valid JSON matching the schema. Do not include any commentary.`;
 
-const MENU_CHAT_PROMPT = `You are a helpful assistant for a restaurant menu. Answer questions about the menu items, ingredients, allergens, dietary options, and prices based only on the menu provided. Be concise and friendly.
+const MENU_CHAT_PROMPT = `You are a helpful assistant for a restaurant menu. Answer questions about the menu items, ingredients, allergens, dietary options, and prices based on the menu provided. Be concise and friendly.
 
-If the menu does not contain enough information to answer with certainty, say that the menu does not say. Do not invent ingredients, allergens, dietary tags, prices, or availability.`;
+For explicit menu facts like prices, ingredients, allergens, dietary tags, and availability, use only what the menu says. Do not invent facts.
+
+For broader nutrition-style questions such as low glycemic index, blood sugar, low carb, lighter options, protein, sodium, fat, cholesterol, or calories, you may make careful food-pattern inferences from the item names, descriptions, categories, and common food knowledge. Always make the uncertainty clear. Do not give medical advice, exact nutrition numbers, or exact glycemic-index claims unless the menu explicitly provides them.`;
+
+const NUTRITION_ANALYSIS_PROMPT = `You are helping classify restaurant menu items for a nutrition-style question. Use the visible menu text plus common food knowledge. Return likely helpful menu items, maybe items, and likely less ideal items.
+
+For low glycemic index, blood sugar, diabetes, low carb, and keto questions, generally prefer protein-forward, vegetable-forward, unsweetened, and non-breaded items. Be cautious with rice, bread, pasta, tortillas, potatoes, sugary sauces, desserts, sweet drinks, and fried breaded items.
+
+Do not claim exact nutrition, calories, carbs, or glycemic index unless the menu explicitly states them. Keep reasons brief and tied to item names/descriptions. Return only valid JSON.`;
 
 const parsedMenuSchema = {
   type: "object",
@@ -147,6 +172,56 @@ const referencedItemsSchema = {
       type: "array",
       items: { type: "string" },
     },
+  },
+};
+
+const nutritionAnalysisSchema = {
+  type: "object",
+  additionalProperties: false,
+  required: [
+    "likelyGoodOptions",
+    "maybeOptions",
+    "lessIdealOptions",
+    "uncertaintyNote",
+  ],
+  properties: {
+    likelyGoodOptions: {
+      type: "array",
+      items: {
+        type: "object",
+        additionalProperties: false,
+        required: ["itemId", "reason"],
+        properties: {
+          itemId: { type: "string" },
+          reason: { type: "string" },
+        },
+      },
+    },
+    maybeOptions: {
+      type: "array",
+      items: {
+        type: "object",
+        additionalProperties: false,
+        required: ["itemId", "reason"],
+        properties: {
+          itemId: { type: "string" },
+          reason: { type: "string" },
+        },
+      },
+    },
+    lessIdealOptions: {
+      type: "array",
+      items: {
+        type: "object",
+        additionalProperties: false,
+        required: ["itemId", "reason"],
+        properties: {
+          itemId: { type: "string" },
+          reason: { type: "string" },
+        },
+      },
+    },
+    uncertaintyNote: { type: "string" },
   },
 };
 
@@ -369,11 +444,64 @@ async function parsePagesWithProgress(
   return parsedPages;
 }
 
-function buildChatInput(context: ChatContext) {
+function isNutritionQuestion(question: string) {
+  return /\b(glycemic|blood sugar|diabetic|diabetes|low carb|keto|carbs?|sugar|healthy|healthier|lighter|protein|sodium|salt|fat|cholesterol|calorie|calories)\b/i.test(
+    question
+  );
+}
+
+function buildNutritionAnalysisContext(analysis: NutritionAnalysis) {
+  const formatItems = (
+    label: string,
+    items: Array<{ itemId: string; reason: string }>
+  ) =>
+    items.length
+      ? `${label}:\n${items
+          .map((item) => `- [${item.itemId}] ${item.reason}`)
+          .join("\n")}`
+      : `${label}: none identified`;
+
+  return [
+    "Nutrition analysis from a separate reasoning pass:",
+    "Use this analysis to give a helpful recommendation. Do not answer only that the menu lacks nutrition data; include that limitation as a caveat after naming likely options.",
+    formatItems("Likely good options", analysis.likelyGoodOptions),
+    formatItems("Maybe options", analysis.maybeOptions),
+    formatItems("Likely less ideal options", analysis.lessIdealOptions),
+    `Uncertainty note: ${analysis.uncertaintyNote}`,
+  ].join("\n\n");
+}
+
+function getNutritionReferencedItemIds(
+  context: ChatContext,
+  analysis: NutritionAnalysis
+) {
+  const validIds = new Set(context.items.map((item) => item.id));
+  const orderedIds = [
+    ...analysis.likelyGoodOptions.map((item) => item.itemId),
+    ...analysis.maybeOptions.map((item) => item.itemId),
+  ];
+  const seen = new Set<string>();
+
+  return orderedIds.filter((itemId): itemId is Id<"menuItems"> => {
+    if (!validIds.has(itemId as Id<"menuItems">) || seen.has(itemId)) {
+      return false;
+    }
+
+    seen.add(itemId);
+    return true;
+  });
+}
+
+function buildChatInput(context: ChatContext, extraContext?: string) {
   return [
     {
       role: "user",
-      content: `Menu context:\n${context.menuContext}`,
+      content: [
+        `Menu context:\n${context.menuContext}`,
+        extraContext ? `\n${extraContext}` : null,
+      ]
+        .filter(Boolean)
+        .join("\n"),
     },
     ...context.messages.map((message) => ({
       role: message.role,
@@ -404,6 +532,7 @@ async function streamAnswerWithOpenAI(
   args: {
     context: ChatContext;
     assistantMessageId: Id<"chatMessages">;
+    extraContext?: string;
   }
 ) {
   const response = await fetch("https://api.openai.com/v1/responses", {
@@ -415,7 +544,7 @@ async function streamAnswerWithOpenAI(
     body: JSON.stringify({
       model: process.env.OPENAI_MENU_CHAT_MODEL ?? "gpt-4o-2024-08-06",
       instructions: MENU_CHAT_PROMPT,
-      input: buildChatInput(args.context),
+      input: buildChatInput(args.context, args.extraContext),
       stream: true,
     }),
   });
@@ -490,7 +619,7 @@ async function streamAnswerWithOpenAI(
   return answer.trim();
 }
 
-async function answerWithOpenAI(context: ChatContext) {
+async function answerWithOpenAI(context: ChatContext, extraContext?: string) {
   const response = await fetch("https://api.openai.com/v1/responses", {
     method: "POST",
     headers: {
@@ -500,7 +629,7 @@ async function answerWithOpenAI(context: ChatContext) {
     body: JSON.stringify({
       model: process.env.OPENAI_MENU_CHAT_MODEL ?? "gpt-4o-2024-08-06",
       instructions: MENU_CHAT_PROMPT,
-      input: buildChatInput(context),
+      input: buildChatInput(context, extraContext),
     }),
   });
 
@@ -511,6 +640,47 @@ async function answerWithOpenAI(context: ChatContext) {
 
   const json = await response.json();
   return extractOutputText(json).trim();
+}
+
+async function analyzeNutritionQuestion(context: ChatContext, question: string) {
+  const response = await fetch("https://api.openai.com/v1/responses", {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${getOpenAIKey()}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      model: process.env.OPENAI_MENU_NUTRITION_MODEL ?? "gpt-4o-2024-08-06",
+      instructions: NUTRITION_ANALYSIS_PROMPT,
+      input: [
+        {
+          role: "user",
+          content: [
+            {
+              type: "input_text",
+              text: `User question:\n${question}\n\nMenu context:\n${context.menuContext}`,
+            },
+          ],
+        },
+      ],
+      text: {
+        format: {
+          type: "json_schema",
+          name: "nutrition_menu_analysis",
+          strict: true,
+          schema: nutritionAnalysisSchema,
+        },
+      },
+    }),
+  });
+
+  if (!response.ok) {
+    const details = await response.text();
+    throw new Error(`OpenAI nutrition analysis failed: ${details}`);
+  }
+
+  const json = await response.json();
+  return JSON.parse(extractOutputText(json)) as NutritionAnalysis;
 }
 
 async function identifyReferencedItems(context: ChatContext, answer: string) {
@@ -724,6 +894,99 @@ export const answerMenuQuestion = internalAction({
         messageId: args.assistantMessageId,
         status: "failed",
         errorMessage: USER_CHAT_ERROR,
+      });
+    }
+  },
+});
+
+export const answerAnonymousChatJob = internalAction({
+  args: {
+    jobId: v.id("anonymousChatJobs"),
+  },
+  handler: async (ctx, args) => {
+    let totalSteps = 4;
+
+    try {
+      await ctx.runMutation(internal.chat.updateAnonymousChatJob, {
+        jobId: args.jobId,
+        status: "loading_menu",
+        message: "Reading the parsed menu.",
+        step: 2,
+        totalSteps,
+      });
+
+      const { job, context } = (await ctx.runQuery(
+        internal.chat.getAnonymousChatJobContext,
+        { jobId: args.jobId }
+      )) as {
+        job: {
+          id: Id<"anonymousChatJobs">;
+          question: string;
+        };
+        context: ChatContext;
+      };
+      const shouldAnalyzeNutrition = isNutritionQuestion(job.question);
+      totalSteps = shouldAnalyzeNutrition ? 5 : 4;
+      let nutritionAnalysis: NutritionAnalysis | null = null;
+      let extraContext: string | undefined;
+
+      if (shouldAnalyzeNutrition) {
+        await ctx.runMutation(internal.chat.updateAnonymousChatJob, {
+          jobId: args.jobId,
+          status: "analyzing_nutrition",
+          message: "Looking for nutrition clues in the menu.",
+          step: 3,
+          totalSteps,
+        });
+
+        nutritionAnalysis = await analyzeNutritionQuestion(context, job.question);
+        extraContext = buildNutritionAnalysisContext(nutritionAnalysis);
+      }
+
+      await ctx.runMutation(internal.chat.updateAnonymousChatJob, {
+        jobId: args.jobId,
+        status: "drafting_answer",
+        message: "Writing a careful answer.",
+        step: shouldAnalyzeNutrition ? 4 : 3,
+        totalSteps,
+      });
+
+      const answer = await answerWithOpenAI(context, extraContext);
+
+      await ctx.runMutation(internal.chat.updateAnonymousChatJob, {
+        jobId: args.jobId,
+        status: "finding_items",
+        message: "Finding matching menu items.",
+        step: shouldAnalyzeNutrition ? 5 : 4,
+        totalSteps,
+      });
+
+      const referencedItemIds = nutritionAnalysis
+        ? getNutritionReferencedItemIds(context, nutritionAnalysis)
+        : await identifyReferencedItems(context, answer);
+
+      await ctx.runMutation(internal.chat.updateAnonymousChatJob, {
+        jobId: args.jobId,
+        status: "complete",
+        message: "Answer complete.",
+        step: totalSteps,
+        totalSteps,
+        answer,
+        referencedItemIds,
+      });
+    } catch (error) {
+      console.error(error);
+      await ctx.runMutation(internal.chat.updateAnonymousChatJob, {
+        jobId: args.jobId,
+        status: "failed",
+        message: "The assistant could not answer this question.",
+        step: totalSteps,
+        totalSteps,
+        errorMessage: USER_CHAT_ERROR,
+      });
+    } finally {
+      await ctx.scheduler.runAfter(chatJobCleanupDelayMs, internal.chat.cleanupAnonymousChatJob, {
+        jobId: args.jobId,
       });
     }
   },

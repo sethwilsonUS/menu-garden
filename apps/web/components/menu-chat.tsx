@@ -1,6 +1,9 @@
 "use client";
 
-import type { MenuItemSummary } from "@menu-garden/shared/types";
+import type {
+  AnonymousChatJobSummary,
+  MenuItemSummary,
+} from "@menu-garden/shared/types";
 import { useChatSession, useMenu } from "@menu-garden/shared/hooks";
 import type { FormEvent } from "react";
 import { useEffect, useMemo, useRef, useState } from "react";
@@ -88,6 +91,38 @@ function RelatedItems({ items }: { items: MenuItemSummary[] }) {
   );
 }
 
+function ChatProgress({ progress }: { progress: AnonymousChatJobSummary | null }) {
+  if (!progress || progress.status === "complete" || progress.status === "failed") {
+    return null;
+  }
+
+  const totalSteps = Math.max(1, Math.floor(progress.totalSteps));
+  const step = Math.min(totalSteps, Math.max(1, Math.floor(progress.step)));
+  const progressText = `Step ${step} of ${totalSteps}: ${progress.message}`;
+
+  return (
+    <div className="min-w-[14rem] space-y-2" aria-live="polite" role="status">
+      <div
+        aria-label="Menu chat answer progress"
+        aria-valuemax={totalSteps}
+        aria-valuemin={1}
+        aria-valuenow={step}
+        aria-valuetext={progressText}
+        className="h-3 overflow-hidden rounded-full border border-accent-border bg-surface-2"
+        role="progressbar"
+      >
+        <div
+          className="h-full rounded-full bg-accent transition-[width] duration-500"
+          style={{ width: `${Math.round((step / totalSteps) * 100)}%` }}
+        />
+      </div>
+      <p className="text-sm font-semibold leading-6 text-foreground-2">
+        {progressText}
+      </p>
+    </div>
+  );
+}
+
 export function MenuChat({ menuId }: { menuId: string }) {
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const didAutoFocusRef = useRef(false);
@@ -103,6 +138,8 @@ export function MenuChat({ menuId }: { menuId: string }) {
     isSending,
     isLoading: isSessionLoading,
     error: chatError,
+    chatProgress,
+    failedQuestion,
   } = useChatSession(menu && anonymousClientId ? menu.id : null, anonymousClientId);
 
   useEffect(() => {
@@ -119,6 +156,14 @@ export function MenuChat({ menuId }: { menuId: string }) {
       textareaRef.current?.focus();
     });
   }, [anonymousClientId, isSessionLoading, menu]);
+
+  useEffect(() => {
+    if (!failedQuestion || draft.trim()) {
+      return;
+    }
+
+    setDraft(failedQuestion);
+  }, [draft, failedQuestion]);
 
   const relatedItems = useMemo(() => {
     if (!menu || latestRelatedItemIds.length === 0) {
@@ -139,7 +184,7 @@ export function MenuChat({ menuId }: { menuId: string }) {
     }
 
     if (isStreaming) {
-      return "Assistant is getting an answer.";
+      return chatProgress?.message ?? "Assistant is getting an answer.";
     }
 
     if (messages.some((message) => message.role === "assistant")) {
@@ -153,6 +198,7 @@ export function MenuChat({ menuId }: { menuId: string }) {
     isSending,
     isSessionLoading,
     isStreaming,
+    chatProgress?.message,
     messages,
   ]);
   const isChatBusy = isSessionLoading || isSending || isStreaming;
@@ -255,9 +301,9 @@ export function MenuChat({ menuId }: { menuId: string }) {
               value={draft}
             />
             <p className="text-sm leading-6 text-foreground-2" id="menu-question-help">
-              Ask about ingredients, prices, allergens, vegetarian options, or what looks
-              easiest to order. Anonymous chats stay on this device and each question can
-              be up to 2,000 characters.
+              Ask about ingredients, prices, allergens, vegetarian options, low
+              glycemic choices, or what looks easiest to order. Anonymous chats
+              stay on this device and each question can be up to 2,000 characters.
             </p>
           </div>
 
@@ -279,6 +325,7 @@ export function MenuChat({ menuId }: { menuId: string }) {
             >
               {statusMessage}
             </p>
+            <ChatProgress progress={chatProgress} />
           </div>
         </form>
 
@@ -299,7 +346,7 @@ export function MenuChat({ menuId }: { menuId: string }) {
                     {message.status === "streaming" ? " is answering" : ""}
                   </p>
                   <p className="mt-2 whitespace-pre-wrap text-base leading-7">
-                    {message.content || "Answer is starting."}
+                    {message.content || chatProgress?.message || "Answer is starting."}
                   </p>
                   {message.status === "failed" ? (
                     <p className="mt-2 text-sm font-semibold text-red-700 dark:text-red-200">

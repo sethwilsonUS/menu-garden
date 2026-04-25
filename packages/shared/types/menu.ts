@@ -73,6 +73,27 @@ export type ChatMessageSummary = {
   updatedAt: number;
 };
 
+export type AnonymousChatJobStatus =
+  | "queued"
+  | "loading_menu"
+  | "analyzing_nutrition"
+  | "drafting_answer"
+  | "finding_items"
+  | "complete"
+  | "failed";
+
+export type AnonymousChatJobSummary = {
+  id: string;
+  status: AnonymousChatJobStatus;
+  message: string;
+  step: number;
+  totalSteps: number;
+  answer?: string;
+  referencedItemIds: string[];
+  errorMessage?: string;
+  updatedAt: number;
+};
+
 export type NearbyRestaurantActionTarget =
   | {
       type: "menu";

@@ -111,6 +111,39 @@ export default defineSchema({
     updatedAt: v.optional(v.float64()),
   }).index("by_session", ["sessionId"]),
 
+  anonymousChatJobs: defineTable({
+    menuId: v.id("menus"),
+    userId: v.optional(v.string()),
+    anonymousClientId: v.optional(v.string()),
+    question: v.string(),
+    history: v.array(
+      v.object({
+        role: v.union(v.literal("user"), v.literal("assistant")),
+        content: v.string(),
+      })
+    ),
+    status: v.union(
+      v.literal("queued"),
+      v.literal("loading_menu"),
+      v.literal("analyzing_nutrition"),
+      v.literal("drafting_answer"),
+      v.literal("finding_items"),
+      v.literal("complete"),
+      v.literal("failed")
+    ),
+    message: v.string(),
+    step: v.float64(),
+    totalSteps: v.float64(),
+    answer: v.optional(v.string()),
+    referencedItemIds: v.optional(v.array(v.id("menuItems"))),
+    errorMessage: v.optional(v.string()),
+    createdAt: v.float64(),
+    updatedAt: v.float64(),
+    expiresAt: v.float64(),
+  })
+    .index("by_menu", ["menuId"])
+    .index("by_expires_at", ["expiresAt"]),
+
   menuParseJobs: defineTable({
     menuId: v.id("menus"),
     status: v.union(

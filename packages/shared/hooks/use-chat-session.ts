@@ -1,5 +1,5 @@
-import type { ChatMessageSummary } from "../types";
-import { useAction } from "convex/react";
+import type { AnonymousChatJobSummary, ChatMessageSummary } from "../types";
+import { useMutation, useQuery } from "convex/react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { api } from "../convex/_generated/api";
 import type { Id } from "../convex/_generated/dataModel";
@@ -13,6 +13,8 @@ type UseChatSessionResult = {
   isSending: boolean;
   isLoading: boolean;
   error: string | null;
+  chatProgress: AnonymousChatJobSummary | null;
+  failedQuestion: string | null;
 };
 
 function createLocalMessageId(prefix: string) {
@@ -26,13 +28,90 @@ export function useChatSession(
   const [messages, setMessages] = useState<ChatMessageSummary[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [isSending, setIsSending] = useState(false);
-  const answerMenuQuestion = useAction(api.ai.answerMenuQuestionEphemeral);
+  const [activeJobId, setActiveJobId] = useState<Id<"anonymousChatJobs"> | null>(
+    null
+  );
+  const [activeAssistantMessageId, setActiveAssistantMessageId] = useState<
+    string | null
+  >(null);
+  const [activeQuestion, setActiveQuestion] = useState<string | null>(null);
+  const [failedQuestion, setFailedQuestion] = useState<string | null>(null);
+  const [localProgress, setLocalProgress] =
+    useState<AnonymousChatJobSummary | null>(null);
+  const startAnonymousChatJob = useMutation(api.chat.startAnonymousChatJob);
+  const chatJob = useQuery(
+    api.chat.getAnonymousChatJob,
+    activeJobId
+      ? {
+          jobId: activeJobId,
+          anonymousClientId: anonymousClientId ?? undefined,
+        }
+      : "skip"
+  ) as AnonymousChatJobSummary | null | undefined;
 
   useEffect(() => {
     setMessages([]);
     setError(null);
     setIsSending(false);
+    setActiveJobId(null);
+    setActiveAssistantMessageId(null);
+    setActiveQuestion(null);
+    setFailedQuestion(null);
+    setLocalProgress(null);
   }, [menuId]);
+
+  useEffect(() => {
+    if (!chatJob || !activeAssistantMessageId) {
+      return;
+    }
+
+    setLocalProgress(chatJob);
+
+    if (chatJob.status === "complete") {
+      setMessages((current) =>
+        current.map((message) =>
+          message.id === activeAssistantMessageId
+            ? {
+                ...message,
+                content: chatJob.answer ?? "",
+                status: "complete",
+                referencedItemIds: chatJob.referencedItemIds,
+                updatedAt: chatJob.updatedAt,
+              }
+            : message
+        )
+      );
+      setActiveJobId(null);
+      setActiveAssistantMessageId(null);
+      setActiveQuestion(null);
+      setLocalProgress(null);
+      return;
+    }
+
+    if (chatJob.status === "failed") {
+      const message =
+        chatJob.errorMessage ?? "The assistant could not answer this question.";
+
+      setError(message);
+      setFailedQuestion(activeQuestion);
+      setMessages((current) =>
+        current.map((chatMessage) =>
+          chatMessage.id === activeAssistantMessageId
+            ? {
+                ...chatMessage,
+                status: "failed",
+                errorMessage: message,
+                updatedAt: chatJob.updatedAt,
+              }
+            : chatMessage
+        )
+      );
+      setActiveJobId(null);
+      setActiveAssistantMessageId(null);
+      setActiveQuestion(null);
+      setLocalProgress(null);
+    }
+  }, [activeAssistantMessageId, activeQuestion, chatJob]);
 
   const sendMessage = useCallback(
     async (content: string) => {
@@ -75,37 +154,37 @@ export function useChatSession(
         }));
 
       setError(null);
+      setFailedQuestion(null);
       setIsSending(true);
+      setLocalProgress({
+        id: assistantMessageId,
+        status: "queued",
+        message: "Question received.",
+        step: 1,
+        totalSteps: 4,
+        referencedItemIds: [],
+        updatedAt: now,
+      });
       setMessages((current) => [...current, userMessage, assistantMessage]);
 
       try {
-        const result = await answerMenuQuestion({
+        const result = await startAnonymousChatJob({
           menuId: menuId as Id<"menus">,
           question: trimmedContent,
           anonymousClientId: anonymousClientId ?? undefined,
           history,
         });
-        const completedAt = Date.now();
 
-        setMessages((current) =>
-          current.map((message) =>
-            message.id === assistantMessageId
-              ? {
-                  ...message,
-                  content: result.answer,
-                  status: "complete",
-                  referencedItemIds: result.referencedItemIds,
-                  updatedAt: completedAt,
-                }
-              : message
-          )
-        );
+        setActiveJobId(result.jobId);
+        setActiveAssistantMessageId(assistantMessageId);
+        setActiveQuestion(trimmedContent);
       } catch (sendError) {
         const message =
           sendError instanceof Error ? sendError.message : "Message could not be sent.";
         const failedAt = Date.now();
 
         setError(message);
+        setFailedQuestion(trimmedContent);
         setMessages((current) =>
           current.map((chatMessage) =>
             chatMessage.id === assistantMessageId
@@ -123,7 +202,7 @@ export function useChatSession(
         setIsSending(false);
       }
     },
-    [anonymousClientId, answerMenuQuestion, menuId, messages]
+    [anonymousClientId, menuId, messages, startAnonymousChatJob]
   );
 
   const isStreaming = messages.some(
@@ -149,5 +228,7 @@ export function useChatSession(
     isSending,
     isLoading: false,
     error,
+    chatProgress: localProgress,
+    failedQuestion,
   };
 }

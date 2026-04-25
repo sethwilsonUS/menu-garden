@@ -14,6 +14,23 @@ const messageStatusValidator = v.union(
   v.literal("complete"),
   v.literal("failed")
 );
+const anonymousChatJobStatusValidator = v.union(
+  v.literal("queued"),
+  v.literal("loading_menu"),
+  v.literal("analyzing_nutrition"),
+  v.literal("drafting_answer"),
+  v.literal("finding_items"),
+  v.literal("complete"),
+  v.literal("failed")
+);
+const chatHistoryValidator = v.array(
+  v.object({
+    role: v.union(v.literal("user"), v.literal("assistant")),
+    content: v.string(),
+  })
+);
+
+const chatJobCleanupDelayMs = 15 * 60 * 1000;
 
 function cleanAnonymousClientId(anonymousClientId?: string) {
   const trimmed = anonymousClientId?.trim();
@@ -464,6 +481,232 @@ export const getEphemeralMenuChatContext = internalQuery({
         spiceLevel: item.spiceLevel,
       })),
     };
+  },
+});
+
+export const startAnonymousChatJob = mutation({
+  args: {
+    menuId: v.id("menus"),
+    question: v.string(),
+    anonymousClientId: v.optional(v.string()),
+    history: v.optional(chatHistoryValidator),
+  },
+  handler: async (ctx, args) => {
+    const identity = await ctx.auth.getUserIdentity();
+    const anonymousClientId = cleanAnonymousClientId(args.anonymousClientId);
+    const question = args.question.trim();
+
+    if (!identity && !anonymousClientId) {
+      throw new Error("Chat is not ready yet. Refresh the page and try again.");
+    }
+
+    if (!question) {
+      throw new Error("Ask a menu question before sending.");
+    }
+
+    if (question.length > 2000) {
+      throw new Error("Keep menu questions under 2,000 characters.");
+    }
+
+    await authorizeMenuAccess(ctx.db, args.menuId, {
+      userId: identity?.subject,
+      anonymousClientId,
+      allowUnlistedLink: true,
+    });
+
+    const now = Date.now();
+    const history = (args.history ?? [])
+      .map((message) => ({
+        role: message.role,
+        content: message.content.trim(),
+      }))
+      .filter((message) => message.content.length > 0)
+      .slice(-10);
+    const jobId = await ctx.db.insert("anonymousChatJobs", {
+      menuId: args.menuId,
+      userId: identity?.subject,
+      anonymousClientId,
+      question,
+      history,
+      status: "queued",
+      message: "Question received.",
+      step: 1,
+      totalSteps: 4,
+      createdAt: now,
+      updatedAt: now,
+      expiresAt: now + chatJobCleanupDelayMs,
+    });
+
+    await ctx.scheduler.runAfter(0, internal.ai.answerAnonymousChatJob, { jobId });
+
+    return { jobId };
+  },
+});
+
+export const getAnonymousChatJob = query({
+  args: {
+    jobId: v.optional(v.id("anonymousChatJobs")),
+    anonymousClientId: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    if (!args.jobId) {
+      return null;
+    }
+
+    const identity = await ctx.auth.getUserIdentity();
+    const anonymousClientId = cleanAnonymousClientId(args.anonymousClientId);
+    const job = await ctx.db.get(args.jobId);
+
+    if (!job) {
+      return null;
+    }
+
+    const isSignedInJob = Boolean(identity?.subject) && job.userId === identity?.subject;
+    const isAnonymousJob =
+      Boolean(anonymousClientId) && job.anonymousClientId === anonymousClientId;
+
+    if (!isSignedInJob && !isAnonymousJob) {
+      throw new Error("You do not have access to this chat answer.");
+    }
+
+    return {
+      id: job._id,
+      status: job.status,
+      message: job.message,
+      step: job.step,
+      totalSteps: job.totalSteps,
+      answer: job.answer,
+      referencedItemIds: job.referencedItemIds ?? [],
+      errorMessage: job.errorMessage,
+      updatedAt: job.updatedAt,
+    };
+  },
+});
+
+export const getAnonymousChatJobContext = internalQuery({
+  args: { jobId: v.id("anonymousChatJobs") },
+  handler: async (ctx, args) => {
+    const job = await ctx.db.get(args.jobId);
+
+    if (!job) {
+      throw new Error("Chat answer job not found.");
+    }
+
+    const menu = await ctx.db.get(job.menuId);
+
+    if (!menu) {
+      throw new Error("Menu not found.");
+    }
+
+    const restaurant = await ctx.db.get(menu.restaurantId);
+
+    if (!restaurant) {
+      throw new Error("Restaurant record not found.");
+    }
+
+    const categories = (
+      await ctx.db
+        .query("menuCategories")
+        .withIndex("by_menu", (q) => q.eq("menuId", job.menuId))
+        .collect()
+    ).sort((a, b) => a.sortOrder - b.sortOrder);
+    const items = (
+      await ctx.db
+        .query("menuItems")
+        .withIndex("by_menu", (q) => q.eq("menuId", job.menuId))
+        .collect()
+    ).sort((a, b) => a.sortOrder - b.sortOrder);
+    const categorySummaries = categories.map((category) => ({
+      id: category._id,
+      name: category.name,
+      description: category.description,
+    }));
+    const itemSummaries = items.map((item) => ({
+      id: item._id,
+      categoryId: item.categoryId,
+      name: item.name,
+      description: item.description,
+      price: item.price,
+      allergens: item.allergens,
+      dietaryTags: item.dietaryTags,
+      spiceLevel: item.spiceLevel,
+    }));
+    const context = {
+      menuTitle: menu.title,
+      restaurantName: restaurant.name,
+      menuContext: serializeMenuContext({
+        menuTitle: menu.title,
+        restaurantName: restaurant.name,
+        categories: categorySummaries,
+        items: itemSummaries,
+      }),
+      messages: [...job.history, { role: "user" as const, content: job.question }],
+      items: itemSummaries.map((item) => ({
+        id: item.id,
+        name: item.name,
+        description: item.description,
+        price: item.price,
+        allergens: item.allergens ?? [],
+        dietaryTags: item.dietaryTags ?? [],
+        spiceLevel: item.spiceLevel,
+      })),
+    };
+
+    return {
+      job: {
+        id: job._id,
+        menuId: job.menuId,
+        question: job.question,
+        history: job.history,
+      },
+      context,
+    };
+  },
+});
+
+export const updateAnonymousChatJob = internalMutation({
+  args: {
+    jobId: v.id("anonymousChatJobs"),
+    status: anonymousChatJobStatusValidator,
+    message: v.string(),
+    step: v.float64(),
+    totalSteps: v.float64(),
+    answer: v.optional(v.string()),
+    referencedItemIds: v.optional(v.array(v.id("menuItems"))),
+    errorMessage: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    const job = await ctx.db.get(args.jobId);
+
+    if (!job) {
+      return;
+    }
+
+    await ctx.db.patch(args.jobId, {
+      status: args.status,
+      message: args.message,
+      step: args.step,
+      totalSteps: args.totalSteps,
+      ...(args.answer === undefined ? {} : { answer: args.answer }),
+      ...(args.referencedItemIds === undefined
+        ? {}
+        : { referencedItemIds: args.referencedItemIds }),
+      errorMessage: args.errorMessage,
+      updatedAt: Date.now(),
+    });
+  },
+});
+
+export const cleanupAnonymousChatJob = internalMutation({
+  args: { jobId: v.id("anonymousChatJobs") },
+  handler: async (ctx, args) => {
+    const job = await ctx.db.get(args.jobId);
+
+    if (!job || job.expiresAt > Date.now()) {
+      return;
+    }
+
+    await ctx.db.delete(args.jobId);
   },
 });
 
