@@ -28,13 +28,6 @@ export default function TabsLayout() {
           tabBarAccessibilityLabel: "Scan menu tab",
         }}
       />
-      <Tabs.Screen
-        name="saved"
-        options={{
-          title: "Saved",
-          tabBarAccessibilityLabel: "Saved menus tab",
-        }}
-      />
     </Tabs>
   );
 }

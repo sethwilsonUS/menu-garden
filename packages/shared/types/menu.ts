@@ -28,12 +28,20 @@ export type MenuItemSummary = {
   sortOrder: number;
 };
 
+export type MenuVisualAssessment = {
+  status: "complete" | "partial" | "insufficient";
+  note: string | null;
+  issues: string[];
+  actionSteps: string[];
+};
+
 export type MenuParseJobSummary = {
   id: string;
   status: "queued" | "converting" | "extracting" | "saving" | "ready" | "failed";
   message: string;
   errorMessage?: string;
   warnings?: string[];
+  visualAssessment?: MenuVisualAssessment;
   totalPages?: number;
   currentPage?: number;
   completedPages?: number;

@@ -156,7 +156,21 @@ export default defineSchema({
     ),
     message: v.string(),
     errorMessage: v.optional(v.string()),
+    lastInternalErrorMessage: v.optional(v.string()),
+    retryCount: v.optional(v.float64()),
     warnings: v.optional(v.array(v.string())),
+    visualAssessment: v.optional(
+      v.object({
+        status: v.union(
+          v.literal("complete"),
+          v.literal("partial"),
+          v.literal("insufficient")
+        ),
+        note: v.union(v.string(), v.null()),
+        issues: v.array(v.string()),
+        actionSteps: v.array(v.string()),
+      })
+    ),
     totalPages: v.optional(v.float64()),
     currentPage: v.optional(v.float64()),
     completedPages: v.optional(v.float64()),

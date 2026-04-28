@@ -17,7 +17,8 @@ export default function DashboardPage() {
         <article className="garden-bed menu-paper space-y-4 px-6 py-6">
           <h2 className="font-display text-2xl font-semibold">Draft menus</h2>
           <p className="text-sm leading-6 text-foreground-2">
-            For now, add a menu from the public reader and use the direct menu link.
+            For now, use the menu reader while restaurant management waits for
+            a later release.
           </p>
           <p className="tag">No menus yet</p>
         </article>
@@ -27,9 +28,7 @@ export default function DashboardPage() {
           <p className="text-sm leading-6 text-foreground-2">
             Claiming and profile management are planned for a later release.
           </p>
-          <Link className="button-secondary" href="/restaurant/menu/demo-menu/edit">
-            Open edit route
-          </Link>
+          <p className="tag">Not enabled yet</p>
         </article>
       </section>
     </SiteShell>

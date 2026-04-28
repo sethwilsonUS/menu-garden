@@ -1,10 +1,14 @@
 "use client";
 
 import Link from "next/link";
-import { useMemo, useState } from "react";
+import { useMemo } from "react";
 import { useQuery } from "convex/react";
 import { api } from "@menu-garden/shared/convex/_generated/api";
-import type { MenuItemSummary, MenuSummary } from "@menu-garden/shared/types";
+import type {
+  MenuItemSummary,
+  MenuSummary,
+  MenuVisualAssessment,
+} from "@menu-garden/shared/types";
 import { MenuParseProgress } from "./menu-parse-progress";
 
 function dietaryLabel(item: MenuItemSummary) {
@@ -18,6 +22,56 @@ function dietaryLabel(item: MenuItemSummary) {
   return details.join(". ");
 }
 
+function PhotoVisibilityNote({
+  assessment,
+}: {
+  assessment: MenuVisualAssessment;
+}) {
+  if (assessment.status !== "partial") {
+    return null;
+  }
+
+  return (
+    <section
+      aria-labelledby="photo-visibility-note-heading"
+      className="rounded-2xl border border-accent-border bg-accent-bg px-4 py-4"
+    >
+      <h3
+        className="font-display text-xl font-semibold"
+        id="photo-visibility-note-heading"
+      >
+        Photo visibility note
+      </h3>
+      {assessment.note ? (
+        <p className="mt-2 text-sm leading-6 text-foreground-2">
+          {assessment.note}
+        </p>
+      ) : null}
+      {assessment.actionSteps.length ? (
+        <ul className="mt-3 list-disc space-y-1 pl-5 text-sm leading-6 text-foreground-2">
+          {assessment.actionSteps.map((step) => (
+            <li key={step}>{step}</li>
+          ))}
+        </ul>
+      ) : null}
+    </section>
+  );
+}
+
+function ParseGuidance({ assessment }: { assessment?: MenuVisualAssessment }) {
+  if (!assessment?.actionSteps.length) {
+    return null;
+  }
+
+  return (
+    <ul className="mt-3 list-disc space-y-1 pl-5 text-sm leading-6 text-foreground-2">
+      {assessment.actionSteps.map((step) => (
+        <li key={step}>{step}</li>
+      ))}
+    </ul>
+  );
+}
+
 function MenuContent({
   menu,
   showActions,
@@ -25,7 +79,6 @@ function MenuContent({
   menu: MenuSummary;
   showActions: boolean;
 }) {
-  const [shareMessage, setShareMessage] = useState<string | null>(null);
   const itemsByCategory = useMemo(() => {
     const grouped = new Map<string, MenuItemSummary[]>();
 
@@ -35,17 +88,6 @@ function MenuContent({
 
     return grouped;
   }, [menu.items]);
-
-  async function handleCopyMenuLink() {
-    const url = `${window.location.origin}/menu/${menu.id}`;
-
-    try {
-      await navigator.clipboard.writeText(url);
-      setShareMessage("Menu link copied.");
-    } catch {
-      setShareMessage(url);
-    }
-  }
 
   return (
     <article className="garden-bed menu-paper space-y-7 px-5 py-6 sm:px-6" id="menu-content">
@@ -62,19 +104,15 @@ function MenuContent({
             <Link className="button-primary" href={`/chat/${menu.id}`}>
               Chat with this menu
             </Link>
-            <button className="button-secondary" onClick={handleCopyMenuLink} type="button">
-              Copy link
-            </button>
             <Link className="button-secondary" href="/">
               Add another menu
             </Link>
           </div>
         ) : null}
       </header>
-      {shareMessage ? (
-        <p aria-live="polite" className="text-sm text-foreground-2">
-          {shareMessage}
-        </p>
+
+      {menu.parseJob?.visualAssessment ? (
+        <PhotoVisibilityNote assessment={menu.parseJob.visualAssessment} />
       ) : null}
 
       {menu.categories.length === 0 ? (
@@ -195,6 +233,7 @@ export function PublicMenuView({
               {menu.parseJob.errorMessage}
             </p>
           ) : null}
+          <ParseGuidance assessment={menu.parseJob.visualAssessment} />
           {menu.parseJob.warnings?.length ? (
             <ul className="mt-3 list-disc space-y-1 pl-5 text-sm leading-6 text-foreground-2">
               {menu.parseJob.warnings.map((warning) => (

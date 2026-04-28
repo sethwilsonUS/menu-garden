@@ -28,8 +28,22 @@ const parseStatusValidator = v.union(
   v.literal("failed")
 );
 
+const visualAssessmentStatusValidator = v.union(
+  v.literal("complete"),
+  v.literal("partial"),
+  v.literal("insufficient")
+);
+
+const visualAssessmentValidator = v.object({
+  status: visualAssessmentStatusValidator,
+  note: v.union(v.string(), v.null()),
+  issues: v.array(v.string()),
+  actionSteps: v.array(v.string()),
+});
+
 const parsedMenuValidator = v.object({
   warnings: v.array(v.string()),
+  visualAssessment: visualAssessmentValidator,
   categories: v.array(
     v.object({
       name: v.string(),
@@ -59,6 +73,12 @@ const SAMPLE_MENU_TITLE = "Sample Accessible Menu";
 
 type ParsedMenuForStorage = {
   warnings: string[];
+  visualAssessment: {
+    status: "complete" | "partial" | "insufficient";
+    note: string | null;
+    issues: string[];
+    actionSteps: string[];
+  };
   categories: {
     name: string;
     description: string | null;
@@ -75,6 +95,12 @@ type ParsedMenuForStorage = {
 
 const sampleMenuFixture = {
   warnings: [],
+  visualAssessment: {
+    status: "complete",
+    note: null,
+    issues: [],
+    actionSteps: [],
+  },
   categories: [
     {
       name: "Breakfast",
@@ -393,6 +419,7 @@ async function buildMenuSummary(
           message: parseJob.message,
           errorMessage: parseJob.errorMessage,
           warnings: parseJob.warnings ?? [],
+          visualAssessment: parseJob.visualAssessment,
           totalPages: parseJob.totalPages,
           currentPage: parseJob.currentPage,
           completedPages: parseJob.completedPages,
@@ -892,6 +919,7 @@ export const getParseJob = query({
       message: parseJob.message,
       errorMessage: parseJob.errorMessage,
       warnings: parseJob.warnings ?? [],
+      visualAssessment: parseJob.visualAssessment,
       totalPages: parseJob.totalPages,
       currentPage: parseJob.currentPage,
       completedPages: parseJob.completedPages,
@@ -906,6 +934,9 @@ export const updateParseJob = internalMutation({
     status: parseStatusValidator,
     message: v.string(),
     errorMessage: v.optional(v.string()),
+    lastInternalErrorMessage: v.optional(v.string()),
+    retryCount: v.optional(v.float64()),
+    visualAssessment: v.optional(visualAssessmentValidator),
     totalPages: v.optional(v.float64()),
     currentPage: v.optional(v.float64()),
     completedPages: v.optional(v.float64()),
@@ -920,15 +951,43 @@ export const updateParseJob = internalMutation({
       return;
     }
 
-    await ctx.db.patch(parseJob._id, {
+    const patch: {
+      status: typeof args.status;
+      message: string;
+      errorMessage?: string;
+      lastInternalErrorMessage?: string;
+      retryCount?: number;
+      visualAssessment?: typeof args.visualAssessment;
+      totalPages?: number;
+      currentPage?: number;
+      completedPages?: number;
+      updatedAt: number;
+    } = {
       status: args.status,
       message: args.message,
-      errorMessage: args.errorMessage,
       totalPages: args.totalPages,
       currentPage: args.currentPage,
       completedPages: args.completedPages,
       updatedAt: Date.now(),
-    });
+    };
+
+    if (args.errorMessage !== undefined) {
+      patch.errorMessage = args.errorMessage;
+    }
+
+    if (args.lastInternalErrorMessage !== undefined) {
+      patch.lastInternalErrorMessage = args.lastInternalErrorMessage;
+    }
+
+    if (args.retryCount !== undefined) {
+      patch.retryCount = args.retryCount;
+    }
+
+    if (args.visualAssessment !== undefined) {
+      patch.visualAssessment = args.visualAssessment;
+    }
+
+    await ctx.db.patch(parseJob._id, patch);
   },
 });
 
@@ -959,7 +1018,12 @@ export const saveParsedMenu = internalMutation({
         status: "ready",
         message: "Your accessible menu is ready.",
         errorMessage: undefined,
+        retryCount: parseJob.retryCount,
         warnings: args.parsedMenu.warnings,
+        visualAssessment:
+          args.parsedMenu.visualAssessment.status === "complete"
+            ? undefined
+            : args.parsedMenu.visualAssessment,
         totalPages,
         currentPage: undefined,
         completedPages: totalPages,
@@ -973,6 +1037,8 @@ export const markParseFailed = internalMutation({
   args: {
     menuId: v.id("menus"),
     errorMessage: v.string(),
+    lastInternalErrorMessage: v.optional(v.string()),
+    visualAssessment: v.optional(visualAssessmentValidator),
   },
   handler: async (ctx, args) => {
     const now = Date.now();
@@ -992,7 +1058,9 @@ export const markParseFailed = internalMutation({
         status: "failed",
         message: "We could not read that menu.",
         errorMessage: args.errorMessage,
+        lastInternalErrorMessage: args.lastInternalErrorMessage,
         warnings: undefined,
+        visualAssessment: args.visualAssessment,
         currentPage: undefined,
         updatedAt: now,
       });

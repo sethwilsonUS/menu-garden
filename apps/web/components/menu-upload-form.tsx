@@ -3,7 +3,7 @@
 import Link from "next/link";
 import type { ChangeEvent, DragEvent, FormEvent } from "react";
 import { useEffect, useRef, useState } from "react";
-import { useConvex, useMutation, useQuery } from "convex/react";
+import { useMutation, useQuery } from "convex/react";
 import { getAnonymousClientId } from "@/lib/anonymous-client";
 import { api } from "@menu-garden/shared/convex/_generated/api";
 import type { Id } from "@menu-garden/shared/convex/_generated/dataModel";
@@ -22,8 +22,6 @@ const maxFiles = 8;
 const maxFileSizeBytes = 20 * 1024 * 1024;
 const maxTotalSizeBytes = 45 * 1024 * 1024;
 const defaultUploadName = "Uploaded menu";
-const existingMenuMessage =
-  "We found this menu already. Opening the accessible version.";
 
 function isAcceptedFile(file: File) {
   return acceptedTypes.includes(file.type) || file.name.toLowerCase().endsWith(".pdf");
@@ -59,10 +57,10 @@ function getSelectedFilesHelp(files: File[]) {
   }
 
   if (sourceTypes.has("pdf")) {
-    return "Each PDF appears as one selected file here. Multi-page PDFs keep their internal page order and are split into pages after upload.";
+    return "Each PDF appears as one selected file here. Multi-page PDFs are split into pages after upload.";
   }
 
-  return "Photos and images are read in this order. Move files if the menu pages are out of sequence.";
+  return "Photos can be whole pages or closer section shots. Menu Garden will combine the readable menu text it finds.";
 }
 
 function CameraIcon() {
@@ -122,25 +120,6 @@ function RemoveIcon() {
       />
     </svg>
   );
-}
-
-async function getSha256Hex(file: File) {
-  if (!globalThis.crypto?.subtle) {
-    throw new Error("Browser file hashing is not available.");
-  }
-
-  const digest = await globalThis.crypto.subtle.digest(
-    "SHA-256",
-    await file.arrayBuffer()
-  );
-
-  return Array.from(new Uint8Array(digest), (byte) =>
-    byte.toString(16).padStart(2, "0")
-  ).join("");
-}
-
-async function getFileHashes(files: File[]) {
-  return await Promise.all(files.map((file) => getSha256Hex(file)));
 }
 
 function getFileError(files: File[]) {
@@ -213,27 +192,17 @@ export function MenuUploadForm({
   const [anonymousClientId, setAnonymousClientId] = useState<string | null>(null);
   const [files, setFiles] = useState<File[]>([]);
   const [menuId, setMenuId] = useState<Id<"menus"> | null>(null);
-  const [wasDuplicateReuse, setWasDuplicateReuse] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
-  const [publicRestaurantName, setPublicRestaurantName] = useState(
-    initialRestaurantName ?? ""
-  );
-  const [publicMenuTitle, setPublicMenuTitle] = useState("");
-  const [detailsMessage, setDetailsMessage] = useState<string | null>(null);
-  const [shareMessage, setShareMessage] = useState<string | null>(null);
   const [statusMessage, setStatusMessage] = useState(
     "Choose menu photos or PDFs to begin."
   );
   const [isSubmitting, setIsSubmitting] = useState(false);
-  const [isSavingDetails, setIsSavingDetails] = useState(false);
   const cameraInputRef = useRef<HTMLInputElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const resultHeadingRef = useRef<HTMLHeadingElement>(null);
 
-  const convex = useConvex();
   const generateUploadUrl = useMutation(api.files.generateUploadUrl);
   const createMenuFromUploads = useMutation(api.menus.createMenuFromUploads);
-  const updateUploadedMenuDetails = useMutation(api.menus.updateUploadedMenuDetails);
   const menu = useQuery(api.menus.getMenu, menuId ? { menuId } : "skip") as
     | MenuSummary
     | null
@@ -249,9 +218,7 @@ export function MenuUploadForm({
     const parseJobMessage = menu?.parseJob?.message;
 
     if (parseJobMessage) {
-      setStatusMessage((current) =>
-        current === existingMenuMessage ? current : parseJobMessage
-      );
+      setStatusMessage(parseJobMessage);
     }
 
     if (menu?.parseJob?.status === "ready") {
@@ -261,9 +228,6 @@ export function MenuUploadForm({
 
   function resetResultState() {
     setMenuId(null);
-    setWasDuplicateReuse(false);
-    setDetailsMessage(null);
-    setShareMessage(null);
   }
 
   function resetFileInputValues() {
@@ -274,6 +238,14 @@ export function MenuUploadForm({
     if (fileInputRef.current) {
       fileInputRef.current.value = "";
     }
+  }
+
+  function resetUploadFlow() {
+    setFiles([]);
+    setFormError(null);
+    resetResultState();
+    resetFileInputValues();
+    setStatusMessage("Choose menu photos or PDFs to begin.");
   }
 
   function updateSelectedFiles(selectedFiles: File[]) {
@@ -339,7 +311,7 @@ export function MenuUploadForm({
     }
   }
 
-  async function submitSelectedFiles({ skipDuplicateCheck = false } = {}) {
+  async function submitSelectedFiles() {
     const fileError = getFileError(files);
 
     if (!anonymousClientId) {
@@ -354,49 +326,10 @@ export function MenuUploadForm({
 
     setFormError(null);
     setIsSubmitting(true);
-    setWasDuplicateReuse(false);
-    setShareMessage(null);
-    setStatusMessage(
-      skipDuplicateCheck
-        ? "Getting ready to read this menu again."
-        : "Getting ready to upload."
-    );
+    setStatusMessage("Getting ready to upload.");
 
     try {
       const sourceType = getSourceType(files[0]);
-      let fileHashes: string[] | undefined;
-
-      if (!skipDuplicateCheck) {
-        try {
-          setStatusMessage("Checking whether this menu was already uploaded.");
-          fileHashes = await getFileHashes(files);
-
-          const existingMenu = await convex.query(
-            api.menus.findMenuByUploadFingerprint,
-            {
-              fileHashes,
-              sourceType,
-            }
-          );
-
-          if (existingMenu) {
-            setMenuId(existingMenu.menuId);
-            setWasDuplicateReuse(true);
-            setStatusMessage(existingMenuMessage);
-            return;
-          }
-        } catch (duplicateCheckError) {
-          console.warn("Menu duplicate check skipped.", duplicateCheckError);
-          setStatusMessage("Getting ready to upload.");
-        }
-      } else {
-        try {
-          fileHashes = await getFileHashes(files);
-        } catch (hashError) {
-          console.warn("Menu upload fingerprint skipped.", hashError);
-        }
-      }
-
       const storageIds: Array<Id<"_storage">> = [];
 
       for (const [index, selectedFile] of files.entries()) {
@@ -425,7 +358,6 @@ export function MenuUploadForm({
         menuTitle: defaultUploadName,
         sourceType,
         anonymousClientId,
-        fileHashes,
         googlePlaceId: initialGooglePlaceId,
         formattedAddress: initialFormattedAddress,
         latitude: initialLatitude,
@@ -452,55 +384,6 @@ export function MenuUploadForm({
     await submitSelectedFiles();
   }
 
-  async function handleDetailsSubmit(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-
-    if (!menuId) {
-      return;
-    }
-
-    const restaurantName = publicRestaurantName.trim();
-    const menuTitle = publicMenuTitle.trim();
-
-    if (!restaurantName && !menuTitle) {
-      setDetailsMessage("Enter a restaurant name or menu title to save publicly.");
-      return;
-    }
-
-    setIsSavingDetails(true);
-    setDetailsMessage("Saving this menu publicly.");
-
-    try {
-      await updateUploadedMenuDetails({
-        menuId,
-        restaurantName: restaurantName || undefined,
-        menuTitle: menuTitle || undefined,
-        anonymousClientId: anonymousClientId ?? undefined,
-      });
-      setDetailsMessage("Menu saved publicly. It will appear in Browse menus when ready.");
-    } catch (error) {
-      console.error(error);
-      setDetailsMessage("Menu details could not be saved. Try again in a moment.");
-    } finally {
-      setIsSavingDetails(false);
-    }
-  }
-
-  async function handleCopyMenuLink() {
-    if (!menuId) {
-      return;
-    }
-
-    const url = `${window.location.origin}/menu/${menuId}`;
-
-    try {
-      await navigator.clipboard.writeText(url);
-      setShareMessage("Menu link copied.");
-    } catch {
-      setShareMessage(url);
-    }
-  }
-
   return (
     <div className="mx-auto grid w-full max-w-6xl gap-10 px-4 py-10 sm:px-6 lg:px-8">
       <section
@@ -522,8 +405,8 @@ export function MenuUploadForm({
               </h1>
               <p className="max-w-xl text-lg leading-8 text-foreground-2">
                 Turn photos and PDFs into readable menu text, then ask about
-                allergens, prices, dietary options, or the dish with the least
-                ordering anxiety.
+                allergens, prices, dietary options, or whatever looks easiest
+                to order.
               </p>
             </div>
           </div>
@@ -590,7 +473,6 @@ export function MenuUploadForm({
                 >
                   Take photos on supported phones, or choose PDFs, PNGs, saved
                   photos, and screenshots. Use PDFs or photos, one type per menu.
-                  Selected file order matters; PDFs keep their internal page order.
                 </p>
               </div>
               <div className="flex w-full flex-col items-stretch justify-center gap-3 sm:w-auto sm:flex-row">
@@ -631,10 +513,35 @@ export function MenuUploadForm({
                 id="menu-camera-help"
               >
                 Camera support depends on your browser. If Take photos opens a
-                file picker, choose saved photos instead. For multi-page menus,
-                take one photo per page in order.
+                file picker, choose saved photos instead.
               </p>
             </div>
+            <details className="rounded-2xl border border-accent-border bg-accent-bg px-4 py-3">
+              <summary className="cursor-pointer text-sm font-semibold text-foreground marker:text-accent">
+                Photo tips for better menu reading
+              </summary>
+              <ul
+                className="mt-3 list-disc space-y-2 pl-5 text-sm leading-6 text-foreground-2"
+                id="menu-photo-tips"
+              >
+                <li>
+                  For dense or folded menus, take several closer photos of each
+                  section instead of one far-away photo of the whole menu.
+                </li>
+                <li>
+                  Try to include the edges of the menu section, especially item
+                  names and prices.
+                </li>
+                <li>
+                  Hold the camera steady, avoid glare or shadows, and retake any
+                  photo where the text looks blurry.
+                </li>
+                <li>
+                  If pages are out of sequence, that is okay. Menu Garden will
+                  still try to combine the readable text.
+                </li>
+              </ul>
+            </details>
           </div>
 
           {files.length ? (
@@ -733,6 +640,18 @@ export function MenuUploadForm({
                 ))}
               </ul>
             ) : null}
+            {menu?.parseJob?.errorMessage ? (
+              <p className="mt-3 text-sm leading-6 text-foreground-2">
+                {menu.parseJob.errorMessage}
+              </p>
+            ) : null}
+            {menu?.parseJob?.visualAssessment?.actionSteps.length ? (
+              <ul className="mt-3 list-disc space-y-1 pl-5 text-sm leading-6 text-foreground-2">
+                {menu.parseJob.visualAssessment.actionSteps.map((step) => (
+                  <li key={step}>{step}</li>
+                ))}
+              </ul>
+            ) : null}
           </div>
 
           <button
@@ -759,92 +678,11 @@ export function MenuUploadForm({
               <Link className="button-primary" href={`/chat/${menuId}`}>
                 Chat with this menu
               </Link>
-              <Link className="button-secondary" href={`/menu/${menuId}`}>
-                Open menu page
-              </Link>
-              <button className="button-secondary" onClick={handleCopyMenuLink} type="button">
-                Copy link
-              </button>
-              <Link className="button-secondary" href="/">
+              <button className="button-secondary" onClick={resetUploadFlow} type="button">
                 Add another menu
-              </Link>
+              </button>
             </div>
           </header>
-          {shareMessage ? (
-            <p aria-live="polite" className="text-sm text-foreground-2">
-              {shareMessage}
-            </p>
-          ) : null}
-          {wasDuplicateReuse ? (
-            <section className="garden-bed menu-paper space-y-3 px-6 py-5">
-              <h3 className="font-display text-2xl font-semibold">
-                Want a fresh scan?
-              </h3>
-              <p className="text-sm leading-6 text-foreground-2">
-                Menu Garden reused a previous result to save time and AI cost.
-                If this file should be read again, start a new scan from the
-                selected upload.
-              </p>
-              <button
-                className="button-secondary w-full sm:w-auto"
-                disabled={!canUpload || files.length === 0}
-                onClick={() => void submitSelectedFiles({ skipDuplicateCheck: true })}
-                type="button"
-              >
-                {isSubmitting ? "Reading again" : "Read this file again"}
-              </button>
-            </section>
-          ) : null}
-          {!wasDuplicateReuse ? (
-            <form className="garden-bed menu-paper space-y-4 px-6 py-6" onSubmit={handleDetailsSubmit}>
-              <div className="space-y-2">
-                <h3 className="font-display text-2xl font-semibold">
-                  Save this menu publicly
-                </h3>
-                <p className="text-sm leading-6 text-foreground-2">
-                  Add a restaurant name or menu title to include this menu in Browse
-                  menus. The direct link works either way.
-                </p>
-              </div>
-              <div className="grid gap-4 md:grid-cols-2">
-                <div className="space-y-2">
-                  <label className="block text-sm font-semibold" htmlFor="detail-restaurant">
-                    Restaurant name
-                  </label>
-                  <input
-                    autoComplete="organization"
-                    className="input-field"
-                    id="detail-restaurant"
-                    onChange={(event) => setPublicRestaurantName(event.target.value)}
-                    placeholder="Restaurant name"
-                    type="text"
-                    value={publicRestaurantName}
-                  />
-                </div>
-                <div className="space-y-2">
-                  <label className="block text-sm font-semibold" htmlFor="detail-title">
-                    Menu title
-                  </label>
-                  <input
-                    className="input-field"
-                    id="detail-title"
-                    onChange={(event) => setPublicMenuTitle(event.target.value)}
-                    placeholder="Lunch menu"
-                    type="text"
-                    value={publicMenuTitle}
-                  />
-                </div>
-              </div>
-              {detailsMessage ? (
-                <p aria-live="polite" className="text-sm text-foreground-2">
-                  {detailsMessage}
-                </p>
-              ) : null}
-              <button className="button-secondary" disabled={isSavingDetails} type="submit">
-                {isSavingDetails ? "Saving publicly" : "Save publicly"}
-              </button>
-            </form>
-          ) : null}
           <PublicMenuView identifier={menuId} showActions={false} />
         </section>
       ) : null}

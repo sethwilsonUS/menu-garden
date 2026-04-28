@@ -10,6 +10,147 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { getAnonymousClientId } from "@/lib/anonymous-client";
 import { MessageForkIcon } from "./brand-mark";
 
+const suggestedQuestions = [
+  "What are the vegetarian options?",
+  "Which dishes avoid common allergens?",
+  "What looks easy to order?",
+];
+
+type MessageBlock =
+  | {
+      type: "paragraph";
+      text: string;
+    }
+  | {
+      type: "ordered-list";
+      items: string[];
+    }
+  | {
+      type: "unordered-list";
+      items: string[];
+    };
+
+function renderInlineMarkdown(text: string) {
+  return text.split(/(\*\*[^*]+\*\*)/g).map((segment, index) => {
+    if (segment.startsWith("**") && segment.endsWith("**")) {
+      return <strong key={`${segment}-${index}`}>{segment.slice(2, -2)}</strong>;
+    }
+
+    return segment;
+  });
+}
+
+function getMessageBlocks(content: string): MessageBlock[] {
+  const blocks: MessageBlock[] = [];
+  const paragraphLines: string[] = [];
+  let activeList:
+    | {
+        type: "ordered-list" | "unordered-list";
+        items: string[];
+      }
+    | null = null;
+
+  function flushParagraph() {
+    if (paragraphLines.length === 0) {
+      return;
+    }
+
+    blocks.push({
+      type: "paragraph",
+      text: paragraphLines.join("\n"),
+    });
+    paragraphLines.length = 0;
+  }
+
+  function flushList() {
+    if (!activeList) {
+      return;
+    }
+
+    blocks.push(activeList);
+    activeList = null;
+  }
+
+  for (const line of content.trim().split("\n")) {
+    const trimmedLine = line.trim();
+
+    if (!trimmedLine) {
+      flushParagraph();
+      flushList();
+      continue;
+    }
+
+    const orderedMatch = trimmedLine.match(/^\d+\.\s+(.+)$/);
+    const unorderedMatch = trimmedLine.match(/^[-*]\s+(.+)$/);
+
+    if (orderedMatch || unorderedMatch) {
+      flushParagraph();
+      const type = orderedMatch ? "ordered-list" : "unordered-list";
+      const item = orderedMatch?.[1] ?? unorderedMatch?.[1] ?? "";
+
+      if (!activeList || activeList.type !== type) {
+        flushList();
+        activeList = { type, items: [] };
+      }
+
+      activeList.items.push(item);
+      continue;
+    }
+
+    flushList();
+    paragraphLines.push(trimmedLine);
+  }
+
+  flushParagraph();
+  flushList();
+
+  return blocks;
+}
+
+function MarkdownMessage({ content }: { content: string }) {
+  const blocks = getMessageBlocks(content);
+
+  if (blocks.length === 0) {
+    return null;
+  }
+
+  return (
+    <div className="mt-2 space-y-3 text-base leading-7">
+      {blocks.map((block, blockIndex) => {
+        if (block.type === "ordered-list") {
+          return (
+            <ol className="list-decimal space-y-2 pl-5" key={`ol-${blockIndex}`}>
+              {block.items.map((item, itemIndex) => (
+                <li key={`${item}-${itemIndex}`}>
+                  {renderInlineMarkdown(item)}
+                </li>
+              ))}
+            </ol>
+          );
+        }
+
+        if (block.type === "unordered-list") {
+          return (
+            <ul className="list-disc space-y-2 pl-5" key={`ul-${blockIndex}`}>
+              {block.items.map((item, itemIndex) => (
+                <li key={`${item}-${itemIndex}`}>
+                  {renderInlineMarkdown(item)}
+                </li>
+              ))}
+            </ul>
+          );
+        }
+
+        return (
+          <p className="whitespace-pre-line" key={`p-${blockIndex}`}>
+            {renderInlineMarkdown(block.text)}
+          </p>
+        );
+      })}
+    </div>
+  );
+}
+
 function itemAccessibilityLabel(item: MenuItemSummary) {
   const dietaryTags = item.dietaryTags ?? [];
   const allergens = item.allergens ?? [];
@@ -27,19 +168,22 @@ function itemAccessibilityLabel(item: MenuItemSummary) {
 function RelatedItems({ items }: { items: MenuItemSummary[] }) {
   if (items.length === 0) {
     return (
-      <aside className="garden-bed menu-paper space-y-2 px-4 py-4">
-        <h2 className="font-display text-lg font-semibold">Related items</h2>
+      <aside className="garden-bed menu-paper space-y-2 px-4 py-4 lg:sticky lg:top-20">
+        <h2 className="font-display text-lg font-semibold">Menu highlights</h2>
         <p className="text-sm leading-6 text-foreground-2">
-          Matching menu items will appear here after an answer.
+          Items connected to the latest answer will appear here.
         </p>
       </aside>
     );
   }
 
   return (
-    <aside className="garden-bed menu-paper space-y-3 px-4 py-4" aria-labelledby="related-items-heading">
+    <aside
+      aria-labelledby="related-items-heading"
+      className="garden-bed menu-paper space-y-3 px-4 py-4 lg:sticky lg:top-20"
+    >
       <h2 className="font-display text-lg font-semibold" id="related-items-heading">
-        Related items
+        Menu highlights
       </h2>
       <ul className="space-y-3">
         {items.map((item) => {
@@ -204,6 +348,14 @@ export function MenuChat({ menuId }: { menuId: string }) {
   const isChatBusy = isSessionLoading || isSending || isStreaming;
   const isQuestionDisabled = !anonymousClientId || isChatBusy;
 
+  function applySuggestedQuestion(question: string) {
+    setDraft(question);
+    setValidationError(null);
+    window.requestAnimationFrame(() => {
+      textareaRef.current?.focus();
+    });
+  }
+
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     const question = draft.trim();
@@ -247,26 +399,114 @@ export function MenuChat({ menuId }: { menuId: string }) {
   }
 
   return (
-    <section className="grid gap-5 lg:grid-cols-[minmax(0,1fr)_18rem] lg:items-start">
-      <div className="space-y-4">
-        <form
-          aria-labelledby="menu-chat-heading"
-          className="garden-bed menu-paper space-y-5 px-5 py-5 sm:px-6"
-          onSubmit={handleSubmit}
-        >
-          <header className="space-y-2">
-            <p className="accent-pill w-fit">
-              <MessageForkIcon />
-              {menu.restaurant.name}
+    <section className="grid gap-5 lg:grid-cols-[minmax(0,1fr)_20rem] lg:items-start">
+      <form
+        aria-labelledby="menu-chat-heading"
+        className="garden-bed menu-paper flex min-h-[min(46rem,calc(100vh-8rem))] flex-col overflow-hidden"
+        onSubmit={handleSubmit}
+      >
+        <header className="border-b border-border px-5 py-5 sm:px-6">
+          <div className="flex flex-wrap items-start justify-between gap-4">
+            <div className="space-y-2">
+              <p className="accent-pill w-fit">
+                <MessageForkIcon />
+                {menu.restaurant.name}
+              </p>
+              <h2 className="font-display text-3xl font-semibold" id="menu-chat-heading">
+                Ask about {menu.title}
+              </h2>
+            </div>
+            <p
+              aria-live="polite"
+              className="rounded-full border border-border bg-surface px-3 py-2 text-sm font-semibold text-foreground-2"
+              role="status"
+            >
+              {statusMessage}
             </p>
-            <h2 className="font-display text-3xl font-semibold" id="menu-chat-heading">
-              Ask about {menu.title}
-            </h2>
-          </header>
+          </div>
+        </header>
 
+        <section
+          aria-labelledby="conversation-heading"
+          className="flex-1 overflow-y-auto px-4 py-5 sm:px-6"
+        >
+          <h2 className="sr-only" id="conversation-heading">
+            Conversation
+          </h2>
+          {messages.length === 0 ? (
+            <div className="mx-auto flex min-h-80 max-w-2xl flex-col justify-center gap-5 text-center">
+              <div className="space-y-2">
+                <p className="font-display text-2xl font-semibold">
+                  The menu is ready when you are.
+                </p>
+                <p className="text-sm leading-6 text-foreground-2">
+                  Ask about ingredients, prices, allergens, dietary options, or
+                  what looks easiest to order.
+                </p>
+              </div>
+              <div
+                aria-label="Suggested menu questions"
+                className="flex flex-wrap justify-center gap-2"
+              >
+                {suggestedQuestions.map((question) => (
+                  <button
+                    className="button-secondary text-sm"
+                    disabled={isQuestionDisabled}
+                    key={question}
+                    onClick={() => applySuggestedQuestion(question)}
+                    type="button"
+                  >
+                    {question}
+                  </button>
+                ))}
+              </div>
+            </div>
+          ) : (
+            <ol aria-label="Conversation" className="mx-auto max-w-3xl space-y-4">
+              {messages.map((message) => {
+                const isUserMessage = message.role === "user";
+
+                return (
+                  <li
+                    className={`flex ${isUserMessage ? "justify-end" : "justify-start"}`}
+                    key={message.id}
+                  >
+                    <article
+                      className={`max-w-[min(100%,42rem)] rounded-2xl border px-4 py-4 ${
+                        isUserMessage
+                          ? "border-accent-border bg-accent-bg"
+                          : "border-border bg-surface"
+                      }`}
+                    >
+                      <p className="font-mono text-sm font-semibold text-muted">
+                        {isUserMessage ? "You" : "Assistant"}
+                        {message.status === "streaming" ? " is answering" : ""}
+                      </p>
+                      {message.content ? (
+                        <MarkdownMessage content={message.content} />
+                      ) : (
+                        <p className="mt-2 text-base leading-7">
+                          {chatProgress?.message || "Answer is starting."}
+                        </p>
+                      )}
+                      {message.status === "failed" ? (
+                        <p className="mt-2 text-sm font-semibold text-critical">
+                          {message.errorMessage ??
+                            "The assistant could not answer this question."}
+                        </p>
+                      ) : null}
+                    </article>
+                  </li>
+                );
+              })}
+            </ol>
+          )}
+        </section>
+
+        <div className="border-t border-border bg-surface-2 px-4 py-4 sm:px-6">
           {(chatError || validationError) && (
             <div
-              className="alert-banner alert-error text-sm font-semibold"
+              className="alert-banner alert-error mb-3 text-sm font-semibold"
               id="chat-error"
               role="alert"
             >
@@ -286,7 +526,7 @@ export function MenuChat({ menuId }: { menuId: string }) {
                 .filter(Boolean)
                 .join(" ")}
               aria-invalid={Boolean(validationError || chatError)}
-              className="input-field min-h-40 leading-7"
+              className="input-field min-h-28 resize-y leading-7"
               disabled={isQuestionDisabled}
               id="menu-question"
               maxLength={2000}
@@ -301,13 +541,11 @@ export function MenuChat({ menuId }: { menuId: string }) {
               value={draft}
             />
             <p className="text-sm leading-6 text-foreground-2" id="menu-question-help">
-              Ask about ingredients, prices, allergens, vegetarian options, low
-              glycemic choices, or what looks easiest to order. Anonymous chats
-              stay on this device and each question can be up to 2,000 characters.
+              This chat is temporary. Each question can be up to 2,000 characters.
             </p>
           </div>
 
-          <div className="flex flex-wrap items-center gap-3">
+          <div className="mt-3 flex flex-wrap items-center gap-3">
             <button
               className="button-primary disabled:cursor-not-allowed disabled:opacity-60"
               disabled={isQuestionDisabled}
@@ -318,48 +556,10 @@ export function MenuChat({ menuId }: { menuId: string }) {
             <p className="text-sm text-foreground-2">
               {draft.length}/2000 characters
             </p>
-            <p
-              aria-live="polite"
-              className="text-sm font-semibold text-foreground-2"
-              role="status"
-            >
-              {statusMessage}
-            </p>
             <ChatProgress progress={chatProgress} />
           </div>
-        </form>
-
-        <section aria-labelledby="conversation-heading" className="space-y-3">
-          <h2 className="sr-only" id="conversation-heading">
-            Conversation
-          </h2>
-          {messages.length === 0 ? (
-            <p className="rounded-2xl border border-border bg-surface-2 px-4 py-4 text-sm leading-6 text-foreground-2">
-              No questions yet. The menu is ready when you are.
-            </p>
-          ) : (
-            <ol aria-label="Conversation" className="space-y-3">
-              {messages.map((message) => (
-                <li className="garden-bed px-4 py-4" key={message.id}>
-                  <p className="font-mono text-sm font-semibold text-muted">
-                    {message.role === "user" ? "You" : "Assistant"}
-                    {message.status === "streaming" ? " is answering" : ""}
-                  </p>
-                  <p className="mt-2 whitespace-pre-wrap text-base leading-7">
-                    {message.content || chatProgress?.message || "Answer is starting."}
-                  </p>
-                  {message.status === "failed" ? (
-                    <p className="mt-2 text-sm font-semibold text-red-700 dark:text-red-200">
-                      {message.errorMessage ??
-                        "The assistant could not answer this question."}
-                    </p>
-                  ) : null}
-                </li>
-              ))}
-            </ol>
-          )}
-        </section>
-      </div>
+        </div>
+      </form>
 
       <RelatedItems items={relatedItems} />
     </section>

@@ -9,7 +9,6 @@ type SiteNavLinksProps = {
 
 const primaryLinks = [
   { href: "/", label: "Add menu" },
-  { href: "/menus", label: "Browse menus" },
 ];
 
 const linkClassByVariant: Record<SiteNavLinksProps["variant"], string> = {

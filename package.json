@@ -6,6 +6,7 @@
     "convex:dev": "npm run convex:dev --workspace @menu-garden/shared",
     "build": "turbo run build",
     "typecheck": "turbo run typecheck",
+    "eval:menu-models": "node scripts/eval-openai-menu-models.mjs",
     "clean": "turbo run clean && rm -rf node_modules",
     "format": "prettier --write \"**/*.{ts,tsx,js,jsx,json,md}\" --ignore-path .gitignore"
   },

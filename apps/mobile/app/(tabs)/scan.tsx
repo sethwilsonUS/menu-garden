@@ -135,7 +135,7 @@ export default function ScanTab() {
             accessibilityHint="Enter the restaurant name for this scanned menu."
             autoCapitalize="words"
             onChangeText={setRestaurantName}
-            placeholder="Demo Bistro"
+            placeholder="Restaurant name"
             placeholderTextColor={theme.textMuted}
             style={{
               minHeight: 48,
